@@ -24,7 +24,8 @@ function buildMasjid(THREE, opt) {
     asphalt: std(0x3b3e42, { roughness: 0.95 }), road: std(0x404347, { roughness: 0.95 }), stripe: std(0xf2f2ee), yellow: std(0xe0b83a),
     curb: std(0xd9d3c6), gravel: std(0xa39d92), dark: std(0x7d8186), rail: std(0x6f6250, { roughness: 0.5, metalness: 0.4 }),
     iron: std(0x2b2d30, { roughness: 0.5, metalness: 0.6 }), sand: std(0xd8c49a), saff: std(0xd8c27a, { roughness: 0.7 }),
-    lamp: std(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 })
+    lamp: std(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 }),
+    doorGlass: std(0x7fa6bb, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.55 }), doorFrame: std(0x3a3d40, { roughness: 0.35, metalness: 0.6 })
   };
   const FLOWER = [0xc8324a, 0xe57aa6, 0xf2c230, 0xf4f1ea, 0x8a5cc2, 0xe8692c].map(c => std(c, { roughness: 0.6, flatShading: true }));
   const ZONES = {
@@ -72,11 +73,20 @@ function buildMasjid(THREE, opt) {
       const mm = ax === 'x' ? mesh(g, m, par, mid, ym, fixed) : mesh(g, m, par, fixed, ym, mid);
       mm.name = name; if (m === M.glass) mm.castShadow = false;
     };
+    // frames for glass doors: jambs, centre mullions, transom
+    ops.filter(o => o.v.some(v => v[2] === 2)).forEach(o => {
+      const W = o.e - o.s, nLeaf = Math.max(2, Math.round(W / 3.2)), fr = (s, e, y0, y1) => { const L = e - s, H = Math.min(y1, hh) - y0; if (H <= 0) return;
+        const g = ax === 'x' ? new THREE.BoxGeometry(L, H, t * 0.5) : new THREE.BoxGeometry(t * 0.5, H, L);
+        ax === 'x' ? mesh(g, M.doorFrame, G.walls, (s + e) / 2, base + y0 + H / 2, fixed, 'door_frame') : mesh(g, M.doorFrame, G.walls, fixed, base + y0 + H / 2, (s + e) / 2, 'door_frame'); };
+      for (let i = 0; i <= nLeaf; i++) { const x = o.s + W * i / nLeaf; fr(Math.max(o.s, x - 0.15), Math.min(o.e, x + 0.15), 0, 9.5); }
+      fr(o.s, o.e, 7.6, 7.85); fr(o.s, o.e, 9.25, 9.5); fr(o.s, o.e, 0, 0.3);
+      for (let i = 0; i < nLeaf; i++) { const x = o.s + W * (i + 0.5) / nLeaf; fr(x - 0.04, x + 0.04, 3.3, 4.3); }
+    });
     for (let i = 0; i < bps.length - 1; i++) {
       const p = bps[i], q = bps[i + 1];
       const holes = ops.filter(o => o.s <= p + 1e-6 && o.e >= q - 1e-6).flatMap(o => o.v).sort((a, b) => a[0] - b[0]);
       let y = 0;
-      for (const [b, tp, gl] of holes) { if (b > y) put(p, q, y, b, mat, t); if (gl) put(p, q, b, tp, M.glass, t * 0.3); y = Math.max(y, tp); }
+      for (const [b, tp, gl] of holes) { if (b > y) put(p, q, y, b, mat, t); if (gl) put(p, q, b, tp, gl === 2 ? M.doorGlass : M.glass, t * 0.3); y = Math.max(y, tp); }
       put(p, q, y, hh, mat, t);
     }
   }
@@ -84,6 +94,7 @@ function buildMasjid(THREE, opt) {
     switch (k) {
       case 'door': return [[0, 7.5]];
       case 'gate': return [[0, 9.5]];
+      case 'gdoor': return [[0, 9.5, 2]];
       case 'hatch': return [[3, 7.5]];
       case 'win': return two ? [[3, 7.5, 1], [GF + 4, GF + 8.5, 1]] : [[3, 7.5, 1]];
       case 'tall': return two ? [[2, GF - 2.5, 1], [GF + 3, TWO - 2.5, 1]] : [[2, h - 2, 1]];
@@ -215,11 +226,29 @@ function buildMasjid(THREE, opt) {
   room({ name: 'Masjid', dim: "53'0\" × 53'0\"", label: false, zone: 'prayer', r: [329.5, 79, 503.5, 252], fl: 3, two: true, t: TE, lvl: "+3'0\"", lz: 6, parapet: true,
     void: [373.75, 98.75, 458.75, 163.75], upperName: 'Upper gallery', upperDim: "Open to below: 26'2\" × 20'0\"",
     note: 'Prayer hall. The 26\'2" × 20\'0" centre is double height, open to the upper floor. Emergency exits on both sides.',
-    o: [['N', 357.5, 378, 'tall'], ['N', 410, 426, 'open'], ['N', 453.75, 473.75, 'tall'],
+    o: [['N', 357.5, 378, 'tall'], ['N', 409.7, 426.3, 'open'], ['N', 453.75, 473.75, 'tall'],
       ['W', 95, 116, 'tall'], ['W', 139, 160, 'tall'], ['W', 182.5, 202.5, 'tall'], ['W', 210, 219], ['W', 210, 219, 'uwin'], ['W', 228, 248, 'win'],
       ['E', 95, 116, 'tall'], ['E', 139, 160, 'tall'], ['E', 182.5, 202.5, 'tall'], ['E', 211, 220], ['E', 232, 247, 'win'],
       ['S', 360, 377.5, 'gate'], ['S', 407.5, 425, 'gate'], ['S', 455, 472.5, 'gate']] });
-  room({ id: 'Mihrab', name: 'Mihrab', label: false, zone: 'prayer', r: [407, 60, 429, 80.5], fl: 3, h: 18, t: TE, nw: ['S'], o: [['W', 66, 76, 'tall'], ['E', 66, 76, 'tall']] });
+  { // MIHRAB — semicircular niche projecting from the qibla wall
+    const mx = PX(418), mz = PZ(79), ri = 2.6, ro = 3.6, fl = 3, H = opt.cut ? opt.cut : 18;
+    const s = new THREE.Shape(); s.absarc(0, 0, ro, 0, Math.PI, false); s.lineTo(-ri, 0); s.absarc(0, 0, ri, Math.PI, 0, true); s.lineTo(ro, 0);
+    const g = new THREE.ExtrudeGeometry(s, { depth: H, bevelEnabled: false, curveSegments: 32 }); g.rotateX(-Math.PI / 2);
+    mesh(g, M.wall, G.walls, mx, fl, mz, 'mihrab_wall');
+    const fs = new THREE.Shape(); fs.absarc(0, 0, ri, 0, Math.PI, false); fs.lineTo(ri, 0);
+    const fg = new THREE.ExtrudeGeometry(fs, { depth: 0.08, bevelEnabled: false, curveSegments: 32 }); fg.rotateX(-Math.PI / 2);
+    const fm = mesh(fg, std(ZONES.prayer.c, { roughness: 0.95 }), G.floors, mx, fl, mz + 0.5, 'mihrab_floor');
+    fm.userData = { name: 'Mihrab', dim: 'Semicircular niche on the qibla wall', zone: 'Prayer', level: "+3'0\"", note: 'Marks the qibla, the direction of prayer.' }; pickables.push(fm);
+    // arched outline inside the niche and a gold band
+    const band = new THREE.Mesh(new THREE.TorusGeometry(ri - 0.05, 0.12, 6, 32, Math.PI), M.gold); band.rotation.x = Math.PI / 2; band.rotation.z = Math.PI; band.position.set(mx, fl + 9, mz); G.furniture.add(band);
+    if (!opt.cut) {
+      const cap = new THREE.ExtrudeGeometry((() => { const c2 = new THREE.Shape(); c2.absarc(0, 0, ro + 0.4, 0, Math.PI, false); c2.lineTo(ro + 0.4, 0); return c2; })(), { depth: 0.8, bevelEnabled: false, curveSegments: 32 });
+      cap.rotateX(-Math.PI / 2); mesh(cap, M.trim, G.roofs, mx, fl + H, mz, 'mihrab_cornice');
+      mesh(new THREE.SphereGeometry(ro, 32, 12, Math.PI, Math.PI, 0, Math.PI / 2), M.dome, G.roofs, mx, fl + H + 0.8, mz, 'mihrab_semidome');
+      mesh(new THREE.LatheGeometry([[0, 0], [0.25, 0], [0.3, 0.3], [0.12, 0.55], [0.05, 1.4], [0, 1.7]].map(q => new THREE.Vector2(q[0], q[1])), 12), M.gold, G.roofs, mx, fl + H + 0.8 + ro - 0.1, mz - 0.6, 'mihrab_finial');
+    }
+    labels.push({ name: 'Mihrab', dim: 'Qibla', x: mx, y: fl + 5, z: mz - 1.5 });
+  }
   room({ name: 'Sound Control Room', dim: "7'6\" × 9'0\"", zone: 'admin', r: [503.5, 223.75, 528, 252], nw: ['W'], fl: 3, two: true, lvl: "+3'0\"", parapet: 'NE',
     note: 'Has a window looking into the Masjid.', o: [['S', 519, 528], ['N', 510, 526, 'win']] });
 
@@ -233,7 +262,7 @@ function buildMasjid(THREE, opt) {
     o: gatesX.concat([['S', 336, 352.5], ['S', 380, 450, 'open2'], ['S', 483.75, 498.75], ['E', 381, 393], ['W', 380, 393, 'uwin']]) });
   room({ name: 'Men Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [329.5, 397, 380, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'SW', o: [['N', 336, 352.5], ['E', 427, 435], ['S', 343.75, 365, 'win']] });
   room({ name: 'Main Entrance', dim: "21'0\" × 11'7\" (double height)", zone: 'circ', r: [380, 397, 450, 435], fl: 2.5, two: true, void: 'all', nw: ['N'], lvl: "+2'6\"", parapet: 'S',
-    o: [['S', 397.5, 435, 'gate'], ['S', 393, 437, 'uwin'], ['W', 427, 435], ['E', 427, 435]] });
+    o: [['S', 397.5, 435, 'gdoor'], ['S', 393, 437, 'uwin'], ['W', 427, 435], ['E', 427, 435]] });
   room({ name: 'Women Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [450, 397, 501, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'S', o: [['N', 483.75, 498.75], ['W', 427, 435], ['S', 468.75, 487.5, 'win']] });
   room({ name: 'Threshold', dim: "21'0\" × 11'1\"", zone: 'circ', r: [375, 435, 456, 481], fl: 2, nw: ['N', 'S', 'E', 'W'], roof: false, lvl: "+2'0\"", note: 'Covered entrance porch with steps down to the entry plaza.' });
 
@@ -350,6 +379,22 @@ function buildMasjid(THREE, opt) {
   }
   for (let i = 0; i < 4; i++) box(thr.x1 - thr.x0, 0.5, 1.1, M.pave, G.site, ecx, 0.25 + (3 - i) * 0.5, thr.z1 + 0.55 + i * 1.1, 'step');
   const stepsEnd = thr.z1 + 4.4;
+  { // ACCESSIBLE RAMP — 1:12 slope, 5 ft wide, along the building front from the porch down to a landing, then a walk to the plaza
+    const top = 2, len = top * 12, zr0 = PZ(450) + 2.4, zr1 = zr0 + 5, xTop = thr.x0, xBot = xTop - len;
+    const pr = new THREE.Shape(); pr.moveTo(0, 0); pr.lineTo(len, 0); pr.lineTo(len, top); pr.lineTo(0, 0.02);
+    const rg = new THREE.ExtrudeGeometry(pr, { depth: zr1 - zr0, bevelEnabled: false }); mesh(rg, M.pave, G.site, xBot, 0, zr0, 'ramp');
+    flat([[xBot - 5, zr0], [xBot, zr0], [xBot, zr1], [xBot - 5, zr1]], 0, M.pave, G.site, 'ramp_landing', 0.12);
+    const ang = Math.atan2(top, len), hl = Math.hypot(len, top);
+    [zr0 + 0.15, zr1 - 0.15].forEach(z => {
+      for (let i = 0; i <= 6; i++) { const x = xBot + len * i / 6, y = top * i / 6; mesh(new THREE.CylinderGeometry(0.07, 0.07, 3, 8), M.doorFrame, G.site, x, y + 1.5, z, 'ramp_post'); }
+      const h = mesh(new THREE.CylinderGeometry(0.09, 0.09, hl + 1, 8), M.doorFrame, G.site, xBot + len / 2, top / 2 + 3, z, 'ramp_handrail'); h.rotation.z = Math.PI / 2 - ang;
+      const m2 = mesh(new THREE.CylinderGeometry(0.05, 0.05, hl, 8), M.doorFrame, G.site, xBot + len / 2, top / 2 + 1.6, z, 'ramp_midrail'); m2.rotation.z = Math.PI / 2 - ang;
+    });
+    // walk from the landing to the entry plaza
+    flat([[xBot - 5, zr1], [xBot, zr1], [xBot, stepsEnd + 4], [xBot - 5, stepsEnd + 4]], 0, M.pave, G.site, 'ramp_walk', 0.12);
+    flat([[xBot - 5, stepsEnd], [ecx - 21, stepsEnd], [ecx - 21, stepsEnd + 4], [xBot - 5, stepsEnd + 4]], 0, M.pave, G.site, 'ramp_walk', 0.12);
+    labels.push({ name: 'Ramp', dim: '1:12 slope', site: true, x: xBot + len / 2, y: 6, z: (zr0 + zr1) / 2 });
+  }
 
   // STAIRS & LIFT (up flight on the east, down flight on the west, landing at the north)
   for (let i = 0; i < 15; i++) {
