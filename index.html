@@ -162,890 +162,1934 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outli
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-/* Masjid & Mawaid at 3812 Barney Rd — model builder.
-   Rooms are taken from the vector architecture plan (sheet 05, rev 09), in PDF points, and converted to feet
-   (Masjid 53'0" = 169.2 pt → 0.31315 ft/pt). Frame: +X = right on the sheet, +Z = down the sheet.
-   The site (lot, road, woods) is traced from aerial imagery and converted into this frame. */
-function buildMasjid(THREE, opt) {
-  opt = Object.assign({ cut: 0, furniture: true, trees: true }, opt || {});
-  const TI = 0.6, TE = 1.0, GF = 15, UP = 13, TWO = GF + 1 + UP;
-  const SC = 0.31315, PX = px => 112 + (px - 329.5) * SC, PZ = py => (py - 80) * SC, PP = (px, py) => [PX(px), PZ(py)];
-  const root = new THREE.Group(); root.name = 'Masjid_Mawaid_Barney_Rd';
-  const G = {};
-  ['floors', 'walls', 'glass', 'upper', 'roofs', 'dome', 'furniture', 'site', 'landscape', 'trees'].forEach(k => { G[k] = new THREE.Group(); G[k].name = k; root.add(G[k]); });
+/* =====================================================================================
+   PROPOSED MASJID & MAWAID — 3812 Barney Rd, Chantilly, Virginia
+   3D model builder (uses the three.js library).
 
-  const std = (c, o) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.88, metalness: 0 }, o || {}));
-  const M = {
-    wall: std(0xeee8dc), oldWall: std(0xcdb79a), plinth: std(0xc9bfae), roof: std(0xd8d1c4), shingle: std(0x4a4f55, { side: THREE.DoubleSide }),
-    trim: std(0xf6f1e6, { roughness: 0.7 }), stone: std(0xe6dccb),
-    glass: std(0x8fb2c6, { roughness: 0.1, metalness: 0.15, transparent: true, opacity: 0.5 }),
-    archGlass: std(0x6f8796, { roughness: 0.15, metalness: 0.2 }),
-    dome: std(0xf3efe6, { roughness: 0.5 }), gold: std(0xd4a640, { roughness: 0.28, metalness: 0.75 }),
-    brass: std(0xc59a45, { roughness: 0.4, metalness: 0.5 }), steel: std(0x9aa3a8, { roughness: 0.4, metalness: 0.4 }),
-    white: std(0xf7f7f5, { roughness: 0.3 }), wood: std(0x8a5d3b), leaf: std(0x46703a, { flatShading: true }), leaf2: std(0x2f5528, { flatShading: true }),
-    hedge: std(0x3d6b35, { flatShading: true }), trunk: std(0x6b4f35), water: std(0x5f9fc0, { roughness: 0.1 }),
-    grass: std(0x5b7a42), lawn: std(0x6b8c4c), soil: std(0x5a4433), pave: std(0xd2c8b4), paveDark: std(0xb9ab92),
-    asphalt: std(0x3b3e42, { roughness: 0.95 }), road: std(0x404347, { roughness: 0.95 }), stripe: std(0xf2f2ee), yellow: std(0xe0b83a),
-    curb: std(0xd9d3c6), gravel: std(0xa39d92), dark: std(0x7d8186), rail: std(0x6f6250, { roughness: 0.5, metalness: 0.4 }),
-    iron: std(0x2b2d30, { roughness: 0.5, metalness: 0.6 }), sand: std(0xd8c49a), saff: std(0xd8c27a, { roughness: 0.7 }),
-    lamp: std(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 }),
-    doorGlass: std(0x7fa6bb, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.55 }), doorFrame: std(0x3a3d40, { roughness: 0.35, metalness: 0.6 })
+   HOW THE MODEL IS LAID OUT
+   - Units are FEET.
+   - Room positions come from the architect's drawing (sheet 05, rev 09). They are written
+     in the drawing's own PDF "points" and converted to feet with planX() / planZ().
+     (The Masjid is 53'0" wide = 169.2 points on the drawing, so 1 point = 0.31315 ft.)
+   - Axes: +X = to the right on the drawing, +Z = down the drawing, +Y = up.
+   - The site (parking lot, road, woods) was traced from aerial photos and is converted
+     into the same axes with aerialToPlan().
+
+   FILE ORDER
+     1. Settings, colours and materials
+     2. Small drawing helpers (box, flat shape, line segment ...)
+     3. Walls, doors and windows
+     4. Rooms, upper floors and roof parapets
+     5. Decorative helpers (arches, flowers, lamps, hedges)
+     6. The building, room by room (Masjid, Sahan, wing, dine area, Mawaid, Madressah)
+     7. Dome, entrance porch, ramp, stairs, furniture
+     8. Site: road, parking lot, drop-off circle, entry plaza, fence, gate, woods
+     9. Minarets, then merge all the window pieces
+   ===================================================================================== */
+function buildMasjid(THREE, options) {
+  const opt = Object.assign({ cut: 0, furniture: true, trees: true }, options || {});
+  // opt.cut > 0 means "plan cut" mode: every wall stops at that height (in feet) and
+  // roofs, dome, minarets and window decorations are left out.
+
+  // ───────────────────────────────── 1. SETTINGS ─────────────────────────────────
+
+  const WALL_INTERIOR = 0.6; // interior wall thickness (ft)
+  const WALL_EXTERIOR = 1.0; // exterior wall thickness (ft)
+  const GROUND_FLOOR_H = 15; // floor-to-floor height of the ground floor (from the drawing)
+  const UPPER_FLOOR_H = 13; // height of the upper floor
+  const TWO_STOREY_H = GROUND_FLOOR_H + 1 + UPPER_FLOOR_H; // full wall height of two-storey parts (29 ft)
+
+  // Convert drawing points to feet.
+  const PT_TO_FT = 0.31315;
+  const planX = (px) => 112 + (px - 329.5) * PT_TO_FT;
+  const planZ = (py) => (py - 80) * PT_TO_FT;
+  const planPt = (px, py) => [planX(px), planZ(py)];
+
+  // Every object goes into one of these named groups, so the page can show/hide them.
+  const root = new THREE.Group();
+  root.name = 'Masjid_Mawaid_Barney_Rd';
+  const groups = {};
+  ['floors', 'walls', 'glass', 'upper', 'roofs', 'dome', 'furniture', 'site', 'landscape', 'trees'].forEach((name) => {
+    groups[name] = new THREE.Group();
+    groups[name].name = name;
+    root.add(groups[name]);
+  });
+
+  // A material = a colour plus surface finish (rough/shiny/metal/see-through).
+  const material = (color, extra) =>
+    new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.88, metalness: 0 }, extra || {}));
+
+  const mat = {
+    wall: material(0xeee8dc),
+    plinth: material(0xc9bfae),
+    roof: material(0xd8d1c4),
+    trim: material(0xf6f1e6, { roughness: 0.7 }),
+    stone: material(0xe6dccb),
+    glass: material(0x8fb2c6, { roughness: 0.1, metalness: 0.15, transparent: true, opacity: 0.5 }),
+    archGlass: material(0x6f8796, { roughness: 0.15, metalness: 0.2 }),
+    dome: material(0xf3efe6, { roughness: 0.5 }),
+    gold: material(0xd4a640, { roughness: 0.28, metalness: 0.75 }),
+    brass: material(0xc59a45, { roughness: 0.4, metalness: 0.5 }),
+    steel: material(0x9aa3a8, { roughness: 0.4, metalness: 0.4 }),
+    white: material(0xf7f7f5, { roughness: 0.3 }),
+    wood: material(0x8a5d3b),
+    leaf: material(0x46703a, { flatShading: true }),
+    leafDark: material(0x2f5528, { flatShading: true }),
+    hedge: material(0x3d6b35, { flatShading: true }),
+    trunk: material(0x6b4f35),
+    water: material(0x5f9fc0, { roughness: 0.1 }),
+    grass: material(0x5b7a42),
+    lawn: material(0x6b8c4c),
+    soil: material(0x5a4433),
+    pave: material(0xd2c8b4),
+    paveDark: material(0xb9ab92),
+    asphalt: material(0x3b3e42, { roughness: 0.95 }),
+    road: material(0x404347, { roughness: 0.95 }),
+    stripe: material(0xf2f2ee),
+    yellow: material(0xe0b83a),
+    curb: material(0xd9d3c6),
+    gravel: material(0xa39d92),
+    dark: material(0x7d8186),
+    rail: material(0x6f6250, { roughness: 0.5, metalness: 0.4 }),
+    iron: material(0x2b2d30, { roughness: 0.5, metalness: 0.6 }),
+    sand: material(0xd8c49a),
+    saff: material(0xd8c27a, { roughness: 0.7 }), // prayer-row lines on the carpet
+    lamp: material(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 }),
+    doorGlass: material(0x7fa6bb, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.55 }),
+    doorFrame: material(0x3a3d40, { roughness: 0.35, metalness: 0.6 }),
   };
-  const FLOWER = [0xc8324a, 0xe57aa6, 0xf2c230, 0xf4f1ea, 0x8a5cc2, 0xe8692c].map(c => std(c, { roughness: 0.6, flatShading: true }));
+
+  // Flower colours: red, pink, yellow, white, purple, orange.
+  const FLOWER = [0xc8324a, 0xe57aa6, 0xf2c230, 0xf4f1ea, 0x8a5cc2, 0xe8692c].map((c) =>
+    material(c, { roughness: 0.6, flatShading: true }),
+  );
+
+  // Floor colour of each kind of room (also used for the colour key on the page).
   const ZONES = {
-    prayer: { c: 0x2e6b5b, n: 'Prayer' }, sahan: { c: 0xe4dfd3, n: 'Sahan & upper floor' }, dining: { c: 0xb68a60, n: 'Dining (Mawaid)' },
-    service: { c: 0xa8b0b4, n: 'Kitchen & service' }, admin: { c: 0xcbb790, n: 'Offices' }, edu: { c: 0x9bb5cb, n: 'Madressah' },
-    wet: { c: 0x86c0c3, n: 'Ablution & restrooms' }, circ: { c: 0xd8d0bf, n: 'Entry & circulation' }, garden: { c: 0x6f9a52, n: 'Garden' }
+    prayer: { c: 0x2e6b5b, n: 'Prayer' },
+    sahan: { c: 0xe4dfd3, n: 'Sahan & upper floor' },
+    dining: { c: 0xb68a60, n: 'Dining (Mawaid)' },
+    service: { c: 0xa8b0b4, n: 'Kitchen & service' },
+    admin: { c: 0xcbb790, n: 'Offices' },
+    edu: { c: 0x9bb5cb, n: 'Madressah' },
+    wet: { c: 0x86c0c3, n: 'Ablution & restrooms' },
+    circ: { c: 0xd8d0bf, n: 'Entry & circulation' },
+    garden: { c: 0x6f9a52, n: 'Garden' },
   };
-  const labels = [], pickables = [];
-  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-  function mesh(geo, mat, parent, x, y, z, name) {
-    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
-    if (name) m.name = name; parent.add(m); return m;
+  const labels = []; // text tags shown on the model
+  const pickables = []; // floors you can tap for room info
+
+  // Repeatable "random" numbers, so trees and flowers land in the same spots every time.
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+  // ───────────────────────────────── 2. DRAWING HELPERS ─────────────────────────────────
+
+  /** Put a shape into the scene at (x, y, z). */
+  function mesh(geometry, material, parent, x, y, z, name) {
+    const m = new THREE.Mesh(geometry, material);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    if (name) m.name = name;
+    parent.add(m);
+    return m;
   }
-  function box(w, h, d, mat, parent, x, y, z, name) { return mesh(new THREE.BoxGeometry(w, h, d), mat, parent, x, y, z, name); }
-  function seg2(p, q, w, h, y, mat, parent, name) {
-    const dx = q[0] - p[0], dz = q[1] - p[1], L = Math.hypot(dx, dz);
-    const m = box(L, h, w, mat, parent, (p[0] + q[0]) / 2, y + h / 2, (p[1] + q[1]) / 2, name);
-    m.rotation.y = -Math.atan2(dz, dx); return m;
+
+  /** A box w wide (x), h tall (y), d deep (z), centred on (x, y, z). */
+  function box(w, h, d, material, parent, x, y, z, name) {
+    return mesh(new THREE.BoxGeometry(w, h, d), material, parent, x, y, z, name);
   }
-  function flat(pts, y, mat, parent, name, thick) {
-    const s = new THREE.Shape(pts.map(p => new THREE.Vector2(p[0], -p[1])));
-    const g = thick ? new THREE.ExtrudeGeometry(s, { depth: thick, bevelEnabled: false }) : new THREE.ShapeGeometry(s);
-    g.rotateX(-Math.PI / 2);
-    const m = mesh(g, mat, parent, 0, y, 0, name); m.castShadow = !!thick; return m;
+
+  /** A long thin box from point p to point q on the ground (curbs, rails, stripes). */
+  function segment(p, q, width, height, y, material, parent, name) {
+    const dx = q[0] - p[0];
+    const dz = q[1] - p[1];
+    const length = Math.hypot(dx, dz);
+    const m = box(length, height, width, material, parent, (p[0] + q[0]) / 2, y + height / 2, (p[1] + q[1]) / 2, name);
+    m.rotation.y = -Math.atan2(dz, dx);
+    return m;
   }
-  function mergeGeos(list) {
-    const pos = [], nor = [];
-    list.forEach(g => { const n = g.index ? g.toNonIndexed() : g; pos.push(...n.attributes.position.array); nor.push(...n.attributes.normal.array); });
+
+  /** A flat ground shape from a list of [x, z] points; give `thick` to make it a slab. */
+  function flat(points, y, material, parent, name, thick) {
+    const shape = new THREE.Shape(points.map((p) => new THREE.Vector2(p[0], -p[1])));
+    const geometry = thick
+      ? new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: false })
+      : new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+    const m = mesh(geometry, material, parent, 0, y, 0, name);
+    m.castShadow = !!thick;
+    return m;
+  }
+
+  /** Join many small shapes into one, so thousands of leaves/flowers draw quickly. */
+  function mergeGeometries(list) {
+    const positions = [];
+    const normals = [];
+    list.forEach((g) => {
+      const flatG = g.index ? g.toNonIndexed() : g;
+      positions.push(...flatG.attributes.position.array);
+      normals.push(...flatG.attributes.normal.array);
+    });
     const out = new THREE.BufferGeometry();
-    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     return out;
   }
-  const inPoly = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if (((yi > p[1]) !== (yj > p[1])) && (p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi)) c = !c; } return c; };
 
-  // ── walls with openings at any height ──
-  function wallRun(ax, fixed, a0, a1, base, h, t, ops, name, mat) {
-    const hh = opt.cut ? Math.min(h, opt.cut) : h; mat = mat || M.wall;
-    ops = ops.map(o => ({ s: Math.max(o.s, a0), e: Math.min(o.e, a1), v: o.v })).filter(o => o.e - o.s > 0.05);
-    const bps = [...new Set([a0, a1, ...ops.flatMap(o => [o.s, o.e])])].sort((a, b) => a - b);
-    const put = (s, e, y0, y1, m, tt) => {
-      y1 = Math.min(y1, hh); if (e - s < 0.05 || y1 - y0 < 0.05) return;
-      const L = e - s, mid = (s + e) / 2, H = y1 - y0, ym = base + y0 + H / 2, par = m === M.glass ? G.glass : G.walls;
-      const g = ax === 'x' ? new THREE.BoxGeometry(L, H, tt) : new THREE.BoxGeometry(tt, H, L);
-      const mm = ax === 'x' ? mesh(g, m, par, mid, ym, fixed) : mesh(g, m, par, fixed, ym, mid);
-      mm.name = name; if (m === M.glass) mm.castShadow = false;
-    };
-    // frames for glass doors: jambs, centre mullions, transom
-    ops.filter(o => o.v.some(v => v[2] === 2)).forEach(o => {
-      const W = o.e - o.s, nLeaf = Math.max(2, Math.round(W / 3.2)), fr = (s, e, y0, y1) => { const L = e - s, H = Math.min(y1, hh) - y0; if (H <= 0) return;
-        const g = ax === 'x' ? new THREE.BoxGeometry(L, H, t * 0.5) : new THREE.BoxGeometry(t * 0.5, H, L);
-        ax === 'x' ? mesh(g, M.doorFrame, G.walls, (s + e) / 2, base + y0 + H / 2, fixed, 'door_frame') : mesh(g, M.doorFrame, G.walls, fixed, base + y0 + H / 2, (s + e) / 2, 'door_frame'); };
-      for (let i = 0; i <= nLeaf; i++) { const x = o.s + W * i / nLeaf; fr(Math.max(o.s, x - 0.15), Math.min(o.e, x + 0.15), 0, 9.5); }
-      fr(o.s, o.e, 7.6, 7.85); fr(o.s, o.e, 9.25, 9.5); fr(o.s, o.e, 0, 0.3);
-      for (let i = 0; i < nLeaf; i++) { const x = o.s + W * (i + 0.5) / nLeaf; fr(x - 0.04, x + 0.04, 3.3, 4.3); }
-      if (!opt.cut) addArchDoor(ax, fixed, t, base, o.s, o.e, 9.5);
-    });
-    for (let i = 0; i < bps.length - 1; i++) {
-      const p = bps[i], q = bps[i + 1];
-      const holes = ops.filter(o => o.s <= p + 1e-6 && o.e >= q - 1e-6).flatMap(o => o.v).filter(v => opt.cut || v[2] !== 1).sort((a, b) => a[0] - b[0]);
-      let y = 0;
-      for (const [b, tp, gl] of holes) { if (b > y) put(p, q, y, b, mat, t); if (gl) put(p, q, b, tp, gl === 2 ? M.doorGlass : M.glass, t * 0.3); y = Math.max(y, tp); }
-      put(p, q, y, hh, mat, t);
+  /** Is point p inside the polygon? (standard ray-crossing test) */
+  function insidePolygon(p, polygon) {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const [xi, yi] = polygon[i];
+      const [xj, yj] = polygon[j];
+      const crosses = yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi;
+      if (crosses) inside = !inside;
     }
-    if (!opt.cut) {
-      const front = ax === 'x' && fixed > PZ(430) && fixed < PZ(470) && a0 > PX(320);
-      ops.forEach(o => o.v.forEach(v => { if (v[2] === 1) addWindows(ax, fixed, t, base, h, o.s, o.e, v[0], v[1], front); }));
-    }
+    return inside;
   }
-  // ── pointed-arch windows (after the reference photos) ──
-  const WIN = { frame: [], glass: [], bar: [], lat: [], dglass: [], dbar: [] };
-  const M_winGlass = std(0x46596a, { roughness: 0.15, metalness: 0.35 }), M_lattice = std(0xd6c29a, { roughness: 0.7 });
-  function pArch(w, h, k) {
-    const r = w * (k || 0.8), hw = w / 2, cL = -hw + r, cR = hw - r, th = Math.acos((hw - r) / r), hs = h - r * Math.sin(th);
-    const s = new THREE.Shape(); s.moveTo(-hw, 0); s.lineTo(-hw, hs); s.absarc(cL, hs, r, Math.PI, th, true); s.absarc(cR, hs, r, Math.PI - th, 0, true); s.lineTo(hw, 0); s.lineTo(-hw, 0);
-    return { s, hs, inside: (x, y, m) => Math.abs(x) < hw - m && y > m && (y < hs || (Math.hypot(x - cL, y - hs) < r - m && Math.hypot(x - cR, y - hs) < r - m)) };
-  }
-  function placeG(g, ax, fixed, t, side, s, y0, off) {
-    const rot = ax === 'x' ? (side > 0 ? 0 : Math.PI) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-    const pos = ax === 'x' ? new THREE.Vector3(s, y0, fixed + side * t / 2) : new THREE.Vector3(fixed + side * t / 2, y0, s);
-    g.applyMatrix4(new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z).multiply(new THREE.Matrix4().makeRotationY(rot)).multiply(new THREE.Matrix4().makeTranslation(0, 0, off)));
-    return g;
-  }
-  // domed glass fanlight and surround over a glass door, springing from the door's transom; kept below the porch canopy
-  function addArchDoor(ax, fixed, t, base, s0, s1, head) {
-    const W = s1 - s0, hw = W / 2, sc = (s0 + s1) / 2, spring = 7.6, rise = Math.min(hw * 1.0, 16 - 0.6 - (base + spring));
-    const arcPts = (h, r) => { const p = []; for (let i = 0; i <= 40; i++) { const a = Math.PI * i / 40, c2 = Math.cos(a); p.push([-h * c2, r * Math.sin(a) * (1 + 0.18 * (1 - Math.abs(c2))) / 1.18]); } return p; };
-    const outline = (h, r, yb) => { const s = new THREE.Shape(); s.moveTo(-h, yb); arcPts(h, r).forEach(([x, y]) => s.lineTo(x, y)); s.lineTo(h, yb); s.lineTo(-h, yb); return s; };
-    const capS = () => { const s = new THREE.Shape(), p = arcPts(hw, rise); s.moveTo(p[0][0], p[0][1]); p.slice(1).forEach(([x, y]) => s.lineTo(x, y)); s.lineTo(p[0][0], p[0][1]); return s; };
-    const ex = (shape, d) => new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false });
-    const y0 = base + spring;
-    [1, -1].forEach(side => {
-      const F = outline(hw + 0.5, rise + 0.45, -spring); F.holes.push(outline(hw, rise, -spring + 0.01));
-      WIN.frame.push(placeG(ex(F, 0.26), ax, fixed, t, side, sc, y0, 0));
-      WIN.dglass.push(placeG(ex(capS(), 0.05), ax, fixed, t, side, sc, y0, 0.02));
-      const hb = new THREE.BoxGeometry(W, 0.25, 0.14); hb.translate(0, 0.12, 0.1); WIN.dbar.push(placeG(hb, ax, fixed, t, side, sc, y0, 0));
-      const vb = new THREE.BoxGeometry(0.2, rise, 0.14); vb.translate(0, rise / 2, 0.1); WIN.dbar.push(placeG(vb, ax, fixed, t, side, sc, y0, 0));
-      [-1, 1].forEach(k => { const L = Math.hypot(hw * 0.62, rise * 0.78), g = new THREE.BoxGeometry(0.16, L, 0.14); g.translate(0, L / 2, 0); g.applyMatrix4(new THREE.Matrix4().makeRotationZ(-k * Math.atan2(hw * 0.62, rise * 0.78))); g.translate(0, 0, 0.1); WIN.dbar.push(placeG(g, ax, fixed, t, side, sc, y0, 0)); });
-    });
-  }
-  function addWindows(ax, fixed, t, base, h, s0, s1, b, tp, front) {
-    const W = s1 - s0, n = Math.max(1, Math.ceil(W / 7)), cw = W / n, w = cw - 0.9;
-    if (w < 1.2) return;
-    const lim = (h > GF + 2 && b < GF) ? GF - 1.5 : h - 1.2, top = Math.min(Math.max(tp, b + w * 1.45), lim), hgt = top - b;
-    for (let i = 0; i < n; i++) {
-      const sc = s0 + cw * (i + 0.5), y0 = base + b;
-      [1, -1].forEach(side => {
-        const A = pArch(w, hgt), F = pArch(w + 0.7, hgt + 0.4);
-        const fs = F.s; fs.holes.push(A.s);
-        const ex = (shape, d) => new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false, curveSegments: 10 });
-        WIN.frame.push(placeG(ex(fs, 0.22), ax, fixed, t, side, sc, y0 - 0.2, 0));
-        WIN.glass.push(placeG(ex(pArch(w, hgt).s, 0.04), ax, fixed, t, side, sc, y0, 0.01));
-        if (front && side > 0) {
-          const L = pArch(w, hgt), sz = 0.2;
-          for (let y = 0.5; y < hgt; y += 0.62) for (let x = -w / 2 + 0.45 + ((Math.round(y / 0.62)) % 2) * 0.31; x < w / 2 - 0.3; x += 0.62)
-            if (L.inside(x, y, 0.38)) { const hp = new THREE.Path(); hp.moveTo(x, y - sz); hp.lineTo(x + sz, y); hp.lineTo(x, y + sz); hp.lineTo(x - sz, y); hp.lineTo(x, y - sz); L.s.holes.push(hp); }
-          WIN.lat.push(placeG(ex(L.s, 0.1), ax, fixed, t, side, sc, y0, 0.05));
-          if (top + 2.4 < h) { const dg = new THREE.BoxGeometry(1.3, 1.3, 0.14); dg.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 4)); WIN.lat.push(placeG(dg, ax, fixed, t, side, sc, top + 1.4, 0.07)); }
-        } else {
-          const vb = new THREE.BoxGeometry(0.16, hgt - 0.1, 0.12); vb.translate(0, hgt / 2, 0.08); WIN.bar.push(placeG(vb, ax, fixed, t, side, sc, y0, 0));
-          const hb = new THREE.BoxGeometry(w, 0.16, 0.12); hb.translate(0, A.hs, 0.08); WIN.bar.push(placeG(hb, ax, fixed, t, side, sc, y0, 0));
-        }
-      });
-    }
-  }
-  function vRanges(k, two, h) {
-    switch (k) {
+
+  /** Turn a list of [radius, height] pairs into a round, turned shape (domes, finials). */
+  const profile = (pairs) => pairs.map((p) => new THREE.Vector2(p[0], p[1]));
+
+  // ───────────────────────────────── 3. WALLS, DOORS AND WINDOWS ─────────────────────────────────
+
+  /*
+    OPENING KINDS — what each word in a room's opening list means.
+    Each kind lists [bottom, top] heights above the floor; a 3rd value marks glass:
+      1 = window (drawn as a pointed-arch window), 2 = glass door.
+  */
+  function openingHeights(kind, twoStorey, wallHeight) {
+    const G = GROUND_FLOOR_H;
+    switch (kind) {
       case 'door': return [[0, 7.5]];
-      case 'gate': return [[0, 9.5]];
-      case 'gdoor': return [[0, 9.5, 2]];
-      case 'hatch': return [[3, 7.5]];
-      case 'win': return two ? [[3, 7.5, 1], [GF + 4, GF + 8.5, 1]] : [[3, 7.5, 1]];
-      case 'tall': return two ? [[2, GF - 2.5, 1], [GF + 3, TWO - 2.5, 1]] : [[2, h - 2, 1]];
-      case 'uwin': return [[GF + 4, GF + 8.5, 1]];
-      case 'open': return [[0, two ? GF : h]];
-      case 'open2': return [[0, h]];
+      case 'gate': return [[0, 9.5]]; // wide double doors
+      case 'gdoor': return [[0, 9.5, 2]]; // glass front doors
+      case 'hatch': return [[3, 7.5]]; // serving hatch
+      case 'win': return twoStorey ? [[3, 7.5, 1], [G + 4, G + 8.5, 1]] : [[3, 7.5, 1]]; // a window on each floor
+      case 'tall': return twoStorey ? [[2, G - 2.5, 1], [G + 3, TWO_STOREY_H - 2.5, 1]] : [[2, wallHeight - 2, 1]];
+      case 'uwin': return [[G + 4, G + 8.5, 1]]; // upper-floor window only
+      case 'open': return [[0, twoStorey ? G : wallHeight]]; // open archway (ground floor)
+      case 'open2': return [[0, wallHeight]]; // open full height
     }
     return [[0, 7.5]];
   }
 
-  // room from plan points: r = [x0, y0, x1, y1] in pt; o = [side, from, to, kind] with absolute pt along that side
+  /*
+    Build one straight wall.
+      axis     'x' = wall runs left–right, 'z' = wall runs up–down the drawing
+      fixed    the wall's position on the other axis
+      from,to  where the wall starts and ends along its axis
+      base     floor level the wall stands on
+      height   wall height;  thick = wall thickness
+      openings [{ s: start, e: end, v: [[bottom, top, glass?], ...] }]
+  */
+  function buildWall(axis, fixed, from, to, base, height, thick, openings, name, wallMat) {
+    const topOfWall = opt.cut ? Math.min(height, opt.cut) : height;
+    wallMat = wallMat || mat.wall;
+
+    // Keep only the openings that fall on this wall.
+    openings = openings
+      .map((o) => ({ s: Math.max(o.s, from), e: Math.min(o.e, to), v: o.v }))
+      .filter((o) => o.e - o.s > 0.05);
+
+    // Cut the wall into strips at every opening edge.
+    const edges = [...new Set([from, to, ...openings.flatMap((o) => [o.s, o.e])])].sort((a, b) => a - b);
+
+    // Place one rectangular piece of wall (or glass) from s to e, between heights y0 and y1.
+    const piece = (s, e, y0, y1, pieceMat, pieceThick) => {
+      y1 = Math.min(y1, topOfWall);
+      if (e - s < 0.05 || y1 - y0 < 0.05) return;
+      const length = e - s;
+      const mid = (s + e) / 2;
+      const h = y1 - y0;
+      const yMid = base + y0 + h / 2;
+      const parent = pieceMat === mat.glass ? groups.glass : groups.walls;
+      const geometry = axis === 'x' ? new THREE.BoxGeometry(length, h, pieceThick) : new THREE.BoxGeometry(pieceThick, h, length);
+      const m = axis === 'x' ? mesh(geometry, pieceMat, parent, mid, yMid, fixed) : mesh(geometry, pieceMat, parent, fixed, yMid, mid);
+      m.name = name;
+      if (pieceMat === mat.glass) m.castShadow = false;
+    };
+
+    // Glass doors: dark metal frame (side posts, middle posts, crossbar, top, bottom, handles).
+    openings
+      .filter((o) => o.v.some((v) => v[2] === 2))
+      .forEach((o) => {
+        const width = o.e - o.s;
+        const leaves = Math.max(2, Math.round(width / 3.2));
+        const frameBar = (s, e, y0, y1) => {
+          const length = e - s;
+          const h = Math.min(y1, topOfWall) - y0;
+          if (h <= 0) return;
+          const g = axis === 'x' ? new THREE.BoxGeometry(length, h, thick * 0.5) : new THREE.BoxGeometry(thick * 0.5, h, length);
+          if (axis === 'x') mesh(g, mat.doorFrame, groups.walls, (s + e) / 2, base + y0 + h / 2, fixed, 'door_frame');
+          else mesh(g, mat.doorFrame, groups.walls, fixed, base + y0 + h / 2, (s + e) / 2, 'door_frame');
+        };
+        for (let i = 0; i <= leaves; i++) {
+          const x = o.s + (width * i) / leaves;
+          frameBar(Math.max(o.s, x - 0.15), Math.min(o.e, x + 0.15), 0, 9.5); // posts
+        }
+        frameBar(o.s, o.e, 7.6, 7.85); // crossbar
+        frameBar(o.s, o.e, 9.25, 9.5); // top
+        frameBar(o.s, o.e, 0, 0.3); // bottom
+        for (let i = 0; i < leaves; i++) {
+          const x = o.s + (width * (i + 0.5)) / leaves;
+          frameBar(x - 0.04, x + 0.04, 3.3, 4.3); // handle
+        }
+        if (!opt.cut) addArchOverDoor(axis, fixed, thick, base, o.s, o.e);
+      });
+
+    // Build the wall strip by strip, leaving gaps for doors (windows stay solid —
+    // they are drawn on the wall faces afterwards, except in plan-cut mode).
+    for (let i = 0; i < edges.length - 1; i++) {
+      const p = edges[i];
+      const q = edges[i + 1];
+      const holes = openings
+        .filter((o) => o.s <= p + 1e-6 && o.e >= q - 1e-6)
+        .flatMap((o) => o.v)
+        .filter((v) => opt.cut || v[2] !== 1)
+        .sort((a, b) => a[0] - b[0]);
+      let y = 0;
+      for (const [bottom, top, glass] of holes) {
+        if (bottom > y) piece(p, q, y, bottom, wallMat, thick); // wall below the opening
+        if (glass) piece(p, q, bottom, top, glass === 2 ? mat.doorGlass : mat.glass, thick * 0.3);
+        y = Math.max(y, top);
+      }
+      piece(p, q, y, topOfWall, wallMat, thick); // wall above the last opening
+    }
+
+    // Pointed-arch windows on both faces. Windows on the front facade get the lattice style.
+    if (!opt.cut) {
+      const isFront = axis === 'x' && fixed > planZ(430) && fixed < planZ(470) && from > planX(320);
+      openings.forEach((o) =>
+        o.v.forEach((v) => {
+          if (v[2] === 1) addWindows(axis, fixed, thick, base, height, o.s, o.e, v[0], v[1], isFront);
+        }),
+      );
+    }
+  }
+
+  // Window pieces are collected here and merged into a few big shapes at the very end.
+  const windowParts = { frame: [], glass: [], bar: [], lattice: [], doorGlass: [], doorBar: [] };
+  const windowGlassMat = material(0x46596a, { roughness: 0.15, metalness: 0.35 });
+  const latticeMat = material(0xd6c29a, { roughness: 0.7 });
+
+  /*
+    Pointed (two-centred) arch outline, w wide and h tall, sitting on y = 0.
+    `sharpness` sets how pointed it is (0.5 = round, 0.8 = default pointed).
+    Returns the shape, the height where the curve starts, and an inside() test.
+  */
+  function pointedArch(w, h, sharpness) {
+    const r = w * (sharpness || 0.8);
+    const half = w / 2;
+    const leftCentre = -half + r;
+    const rightCentre = half - r;
+    const apexAngle = Math.acos((half - r) / r);
+    const springY = h - r * Math.sin(apexAngle);
+    const s = new THREE.Shape();
+    s.moveTo(-half, 0);
+    s.lineTo(-half, springY);
+    s.absarc(leftCentre, springY, r, Math.PI, apexAngle, true);
+    s.absarc(rightCentre, springY, r, Math.PI - apexAngle, 0, true);
+    s.lineTo(half, 0);
+    s.lineTo(-half, 0);
+    const inside = (x, y, margin) =>
+      Math.abs(x) < half - margin &&
+      y > margin &&
+      (y < springY ||
+        (Math.hypot(x - leftCentre, y - springY) < r - margin && Math.hypot(x - rightCentre, y - springY) < r - margin));
+    return { s, hs: springY, inside };
+  }
+
+  /*
+    Move a flat window part (drawn facing +Z at the origin) onto a wall face.
+      side   +1 or -1: which face of the wall
+      along  position along the wall;  y0 = height;  out = how far it sits proud of the wall
+  */
+  function placeOnWall(geometry, axis, fixed, thick, side, along, y0, out) {
+    const turn = axis === 'x' ? (side > 0 ? 0 : Math.PI) : side > 0 ? Math.PI / 2 : -Math.PI / 2;
+    const pos =
+      axis === 'x'
+        ? new THREE.Vector3(along, y0, fixed + (side * thick) / 2)
+        : new THREE.Vector3(fixed + (side * thick) / 2, y0, along);
+    geometry.applyMatrix4(
+      new THREE.Matrix4()
+        .makeTranslation(pos.x, pos.y, pos.z)
+        .multiply(new THREE.Matrix4().makeRotationY(turn))
+        .multiply(new THREE.Matrix4().makeTranslation(0, 0, out)),
+    );
+    return geometry;
+  }
+
+  const extrude = (shape, depth, curveSegments) =>
+    new THREE.ExtrudeGeometry(shape, curveSegments ? { depth, bevelEnabled: false, curveSegments } : { depth, bevelEnabled: false });
+
+  /*
+    The domed glass panel over the glass front doors. It starts at the doors' crossbar
+    (7.6 ft) and is kept low enough to fit under the porch canopy (16 ft).
+  */
+  function addArchOverDoor(axis, fixed, thick, base, from, to) {
+    const width = to - from;
+    const half = width / 2;
+    const centre = (from + to) / 2;
+    const spring = 7.6; // the crossbar height, where the arch begins
+    const rise = Math.min(half * 1.0, 16 - 0.6 - (base + spring));
+
+    // Points along a rounded arch with a slight point at the top.
+    const arcPoints = (h, r) => {
+      const pts = [];
+      for (let i = 0; i <= 40; i++) {
+        const a = (Math.PI * i) / 40;
+        const c = Math.cos(a);
+        pts.push([-h * c, (r * Math.sin(a) * (1 + 0.18 * (1 - Math.abs(c)))) / 1.18]);
+      }
+      return pts;
+    };
+    // The arch with straight sides going down to yBottom (used for the frame).
+    const archWithSides = (h, r, yBottom) => {
+      const s = new THREE.Shape();
+      s.moveTo(-h, yBottom);
+      arcPoints(h, r).forEach(([x, y]) => s.lineTo(x, y));
+      s.lineTo(h, yBottom);
+      s.lineTo(-h, yBottom);
+      return s;
+    };
+    // Just the curved glass part above the crossbar.
+    const archGlass = () => {
+      const s = new THREE.Shape();
+      const pts = arcPoints(half, rise);
+      s.moveTo(pts[0][0], pts[0][1]);
+      pts.slice(1).forEach(([x, y]) => s.lineTo(x, y));
+      s.lineTo(pts[0][0], pts[0][1]);
+      return s;
+    };
+
+    const y0 = base + spring;
+    [1, -1].forEach((side) => {
+      const frame = archWithSides(half + 0.5, rise + 0.45, -spring);
+      frame.holes.push(archWithSides(half, rise, -spring + 0.01));
+      windowParts.frame.push(placeOnWall(extrude(frame, 0.26), axis, fixed, thick, side, centre, y0, 0));
+      windowParts.doorGlass.push(placeOnWall(extrude(archGlass(), 0.05), axis, fixed, thick, side, centre, y0, 0.02));
+
+      const crossbar = new THREE.BoxGeometry(width, 0.25, 0.14);
+      crossbar.translate(0, 0.12, 0.1);
+      windowParts.doorBar.push(placeOnWall(crossbar, axis, fixed, thick, side, centre, y0, 0));
+
+      const centreBar = new THREE.BoxGeometry(0.2, rise, 0.14);
+      centreBar.translate(0, rise / 2, 0.1);
+      windowParts.doorBar.push(placeOnWall(centreBar, axis, fixed, thick, side, centre, y0, 0));
+
+      // two slanted bars fanning out from the middle
+      [-1, 1].forEach((k) => {
+        const length = Math.hypot(half * 0.62, rise * 0.78);
+        const bar = new THREE.BoxGeometry(0.16, length, 0.14);
+        bar.translate(0, length / 2, 0);
+        bar.applyMatrix4(new THREE.Matrix4().makeRotationZ(-k * Math.atan2(half * 0.62, rise * 0.78)));
+        bar.translate(0, 0, 0.1);
+        windowParts.doorBar.push(placeOnWall(bar, axis, fixed, thick, side, centre, y0, 0));
+      });
+    });
+  }
+
+  /*
+    Pointed-arch windows (from the reference photos) for one wall opening.
+    Wide openings are split into several windows. Front-facade windows get a carved
+    lattice screen and a diamond ornament above; all others get a cross-shaped divider.
+  */
+  function addWindows(axis, fixed, thick, base, wallHeight, from, to, bottom, top, isFront) {
+    const openingWidth = to - from;
+    const count = Math.max(1, Math.ceil(openingWidth / 7));
+    const cell = openingWidth / count;
+    const w = cell - 0.9;
+    if (w < 1.2) return;
+
+    // Make the window tall enough for a good arch, but keep it inside its floor.
+    const maxTop = wallHeight > GROUND_FLOOR_H + 2 && bottom < GROUND_FLOOR_H ? GROUND_FLOOR_H - 1.5 : wallHeight - 1.2;
+    const windowTop = Math.min(Math.max(top, bottom + w * 1.45), maxTop);
+    const h = windowTop - bottom;
+
+    for (let i = 0; i < count; i++) {
+      const centre = from + cell * (i + 0.5);
+      const y0 = base + bottom;
+
+      [1, -1].forEach((side) => {
+        const opening = pointedArch(w, h);
+        const frame = pointedArch(w + 0.7, h + 0.4).s;
+        frame.holes.push(opening.s);
+        windowParts.frame.push(placeOnWall(extrude(frame, 0.22, 10), axis, fixed, thick, side, centre, y0 - 0.2, 0));
+        windowParts.glass.push(placeOnWall(extrude(pointedArch(w, h).s, 0.04, 10), axis, fixed, thick, side, centre, y0, 0.01));
+
+        if (isFront && side > 0) {
+          // Lattice screen: the arch shape with rows of small diamond holes cut out.
+          const screen = pointedArch(w, h);
+          const hole = 0.2;
+          for (let y = 0.5; y < h; y += 0.62) {
+            for (let x = -w / 2 + 0.45 + (Math.round(y / 0.62) % 2) * 0.31; x < w / 2 - 0.3; x += 0.62) {
+              if (!screen.inside(x, y, 0.38)) continue;
+              const d = new THREE.Path();
+              d.moveTo(x, y - hole);
+              d.lineTo(x + hole, y);
+              d.lineTo(x, y + hole);
+              d.lineTo(x - hole, y);
+              d.lineTo(x, y - hole);
+              screen.s.holes.push(d);
+            }
+          }
+          windowParts.lattice.push(placeOnWall(extrude(screen.s, 0.1, 10), axis, fixed, thick, side, centre, y0, 0.05));
+
+          // Diamond ornament above the window, if there is room.
+          if (windowTop + 2.4 < wallHeight) {
+            const diamond = new THREE.BoxGeometry(1.3, 1.3, 0.14);
+            diamond.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 4));
+            windowParts.lattice.push(placeOnWall(diamond, axis, fixed, thick, side, centre, windowTop + 1.4, 0.07));
+          }
+        } else {
+          // Cross-shaped divider: one upright bar and one bar where the arch starts.
+          const upright = new THREE.BoxGeometry(0.16, h - 0.1, 0.12);
+          upright.translate(0, h / 2, 0.08);
+          windowParts.bar.push(placeOnWall(upright, axis, fixed, thick, side, centre, y0, 0));
+          const crossbar = new THREE.BoxGeometry(w, 0.16, 0.12);
+          crossbar.translate(0, opening.hs, 0.08);
+          windowParts.bar.push(placeOnWall(crossbar, axis, fixed, thick, side, centre, y0, 0));
+        }
+      });
+    }
+  }
+
+  // ───────────────────────────────── 4. ROOMS ─────────────────────────────────
+
+  /*
+    Build a room: its walls, floor, optional upper floor, roof, parapet and label.
+
+    Room settings (all positions are in drawing points):
+      r        [left, top, right, bottom] corners of the room
+      o        openings: [side 'N'|'S'|'E'|'W', from, to, kind] — see openingHeights()
+      nw       sides with NO wall (shared with a neighbour), e.g. ['N', 'E']
+      fl       floor level in feet;  h = wall height;  two = two storeys high
+      t        wall thickness;  out = walls sit outside the rectangle (outer shell)
+      zone     floor colour / type (see ZONES);  name, dim, note, lvl = info card text
+      roof     false = no flat roof;  parapet = sides with a decorative roof edge ('NSEW' or true)
+      void     for two-storey rooms: [l, t, r, b] opening in the upper floor ('all' = no upper floor)
+      label    false = no text tag;  wc = add a toilet
+  */
   function room(R) {
-    const [a, b, c, d] = R.r, x0 = PX(a), z0 = PZ(b), x1 = PX(c), z1 = PZ(d);
-    const t = R.t || (R.out ? TE : TI), fl = R.fl || 0, h = R.two ? TWO : (R.h || 11), nw = R.nw || [], wmat = R.old ? M.oldWall : M.wall;
-    const ops = { N: [], S: [], E: [], W: [] };
-    (R.o || []).forEach(([sd, f, to, k]) => { const s = (sd === 'N' || sd === 'S') ? PX(f) : PZ(f), e = (sd === 'N' || sd === 'S') ? PX(to) : PZ(to); ops[sd].push({ s, e, v: vRanges(k || 'door', R.two, h) }); });
-    const nm = (R.id || R.name || 'wall').replace(/[^A-Za-z0-9]+/g, '_');
+    const [a, b, c, d] = R.r;
+    const x0 = planX(a), z0 = planZ(b), x1 = planX(c), z1 = planZ(d);
+    const thick = R.t || (R.out ? WALL_EXTERIOR : WALL_INTERIOR);
+    const floor = R.fl || 0;
+    const height = R.two ? TWO_STOREY_H : R.h || 11;
+    const noWall = R.nw || [];
+
+    // Sort the openings by side and convert them to feet.
+    const openings = { N: [], S: [], E: [], W: [] };
+    (R.o || []).forEach(([side, from, to, kind]) => {
+      const horizontal = side === 'N' || side === 'S';
+      openings[side].push({
+        s: horizontal ? planX(from) : planZ(from),
+        e: horizontal ? planX(to) : planZ(to),
+        v: openingHeights(kind || 'door', R.two, height),
+      });
+    });
+
+    const name = (R.id || R.name || 'wall').replace(/[^A-Za-z0-9]+/g, '_');
+    const wall = (side, axis, fixed, from, to) => {
+      if (!noWall.includes(side)) buildWall(axis, fixed, from, to, floor, height, thick, openings[side], name + '_' + side, mat.wall);
+    };
+
     if (!R.out) {
-      if (!nw.includes('N')) wallRun('x', z0 + t / 2, x0, x1, fl, h, t, ops.N, nm + '_N', wmat);
-      if (!nw.includes('S')) wallRun('x', z1 - t / 2, x0, x1, fl, h, t, ops.S, nm + '_S', wmat);
-      const za = z0 + (nw.includes('N') ? 0 : t), zb = z1 - (nw.includes('S') ? 0 : t);
-      if (!nw.includes('W')) wallRun('z', x0 + t / 2, za, zb, fl, h, t, ops.W, nm + '_W', wmat);
-      if (!nw.includes('E')) wallRun('z', x1 - t / 2, za, zb, fl, h, t, ops.E, nm + '_E', wmat);
+      // walls sit inside the room rectangle
+      wall('N', 'x', z0 + thick / 2, x0, x1);
+      wall('S', 'x', z1 - thick / 2, x0, x1);
+      const zTop = z0 + (noWall.includes('N') ? 0 : thick);
+      const zBottom = z1 - (noWall.includes('S') ? 0 : thick);
+      wall('W', 'z', x0 + thick / 2, zTop, zBottom);
+      wall('E', 'z', x1 - thick / 2, zTop, zBottom);
     } else {
-      if (!nw.includes('N')) wallRun('x', z0 - t / 2, x0 - t, x1 + t, fl, h, t, ops.N, nm + '_N', wmat);
-      if (!nw.includes('S')) wallRun('x', z1 + t / 2, x0 - t, x1 + t, fl, h, t, ops.S, nm + '_S', wmat);
-      if (!nw.includes('W')) wallRun('z', x0 - t / 2, z0, z1, fl, h, t, ops.W, nm + '_W', wmat);
-      if (!nw.includes('E')) wallRun('z', x1 + t / 2, z0, z1, fl, h, t, ops.E, nm + '_E', wmat);
+      // outer shell: walls sit just outside the rectangle
+      wall('N', 'x', z0 - thick / 2, x0 - thick, x1 + thick);
+      wall('S', 'x', z1 + thick / 2, x0 - thick, x1 + thick);
+      wall('W', 'z', x0 - thick / 2, z0, z1);
+      wall('E', 'z', x1 + thick / 2, z0, z1);
     }
+
+    // Floor slab, coloured by zone; tapping it shows the room info card.
     if (R.floor !== false) {
-      const top = fl + 0.03 * (R.layer == null ? 1 : R.layer) + 0.02, ex = R.out ? t : 0;
-      const zmat = std(ZONES[R.zone || 'circ'].c, { roughness: R.zone === 'prayer' ? 0.95 : 0.6 });
-      const f = mesh(new THREE.BoxGeometry(x1 - x0 + 2 * ex, top, z1 - z0 + 2 * ex), [M.plinth, M.plinth, zmat, M.plinth, M.plinth, M.plinth], G.floors, (x0 + x1) / 2, top / 2, (z0 + z1) / 2, nm + '_floor');
-      if (R.name) { f.userData = { name: R.name, dim: R.dim || '', zone: ZONES[R.zone || 'circ'].n, level: R.lvl || '', note: R.note || '' }; pickables.push(f); }
+      const top = floor + 0.03 * (R.layer == null ? 1 : R.layer) + 0.02;
+      const extra = R.out ? thick : 0;
+      const zoneMat = material(ZONES[R.zone || 'circ'].c, { roughness: R.zone === 'prayer' ? 0.95 : 0.6 });
+      const f = mesh(
+        new THREE.BoxGeometry(x1 - x0 + 2 * extra, top, z1 - z0 + 2 * extra),
+        [mat.plinth, mat.plinth, zoneMat, mat.plinth, mat.plinth, mat.plinth], // coloured top, plain sides
+        groups.floors,
+        (x0 + x1) / 2, top / 2, (z0 + z1) / 2,
+        name + '_floor',
+      );
+      if (R.name) {
+        f.userData = { name: R.name, dim: R.dim || '', zone: ZONES[R.zone || 'circ'].n, level: R.lvl || '', note: R.note || '' };
+        pickables.push(f);
+      }
     }
-    if (R.two && !opt.cut) upperSlab(R, x0, z0, x1, z1, t, fl);
-    if (R.roof !== false) box(x1 - x0 + 0.6, 1, z1 - z0 + 0.6, M.roof, G.roofs, (x0 + x1) / 2, fl + h + 0.5, (z0 + z1) / 2, nm + '_roof');
-    if (R.parapet && !opt.cut) parapet(x0, z0, x1, z1, fl + h + 1, R.parapet);
-    if (R.name && R.label !== false) labels.push({ name: R.name, dim: R.dim || '', big: !!R.big, x: (x0 + x1) / 2 + (R.lx || 0), y: fl + (R.big ? 12 : 5), z: (z0 + z1) / 2 + (R.lz || 0) });
-    if (R.wc && opt.furniture) toilet((x0 + x1) / 2, fl, z0 + 1.8);
+
+    if (R.two && !opt.cut) upperFloor(R, x0, z0, x1, z1, thick, floor);
+    if (R.roof !== false) {
+      box(x1 - x0 + 0.6, 1, z1 - z0 + 0.6, mat.roof, groups.roofs, (x0 + x1) / 2, floor + height + 0.5, (z0 + z1) / 2, name + '_roof');
+    }
+    if (R.parapet && !opt.cut) parapet(x0, z0, x1, z1, floor + height + 1, R.parapet);
+    if (R.name && R.label !== false) {
+      labels.push({
+        name: R.name, dim: R.dim || '', big: !!R.big,
+        x: (x0 + x1) / 2 + (R.lx || 0), y: floor + (R.big ? 12 : 5), z: (z0 + z1) / 2 + (R.lz || 0),
+      });
+    }
+    if (R.wc && opt.furniture) toilet((x0 + x1) / 2, floor, z0 + 1.8);
     return { x0, z0, x1, z1 };
   }
-  function toilet(x, fl, z) { box(1.4, 1.4, 2, M.white, G.furniture, x, fl + 0.7, z, 'toilet'); }
 
-  function upperSlab(R, x0, z0, x1, z1, t, fl) {
-    const a = x0 + t, b = z0 + t, c = x1 - t, d = z1 - t, y = fl + GF + 0.5;
-    const zm = std(ZONES[R.zone === 'prayer' ? 'prayer' : 'sahan'].c, { roughness: 0.8 });
-    const slab = (sx0, sz0, sx1, sz1) => { if (sx1 - sx0 > 0.1 && sz1 - sz0 > 0.1) {
-      const m = mesh(new THREE.BoxGeometry(sx1 - sx0, 1, sz1 - sz0), [M.plinth, M.plinth, zm, M.trim, M.plinth, M.plinth], G.upper, (sx0 + sx1) / 2, y, (sz0 + sz1) / 2, 'upper_slab');
-      if (R.upperName) { m.userData = { name: R.upperName, dim: R.upperDim || '', zone: 'Upper floor', level: 'Upper floor, ' + (GF + 1) + ' ft above ground floor', note: 'Layout of this floor was not provided; shown as open floor.' }; pickables.push(m); }
-    } };
-    if (!R.void) slab(a, b, c, d);
-    else if (R.void !== 'all') {
-      const [v0, w0, v1, w1] = [PX(R.void[0]), PZ(R.void[1]), PX(R.void[2]), PZ(R.void[3])];
-      slab(a, b, c, w0); slab(a, w1, c, d); slab(a, w0, v0, w1); slab(v1, w0, c, w1);
+  function toilet(x, floor, z) {
+    box(1.4, 1.4, 2, mat.white, groups.furniture, x, floor + 0.7, z, 'toilet');
+  }
+
+  /** Upper floor slab of a two-storey room, with an opening (and railing) where it is double height. */
+  function upperFloor(R, x0, z0, x1, z1, thick, floor) {
+    const left = x0 + thick, top = z0 + thick, right = x1 - thick, bottom = z1 - thick;
+    const y = floor + GROUND_FLOOR_H + 0.5;
+    const zoneMat = material(ZONES[R.zone === 'prayer' ? 'prayer' : 'sahan'].c, { roughness: 0.8 });
+
+    const slab = (sx0, sz0, sx1, sz1) => {
+      if (sx1 - sx0 <= 0.1 || sz1 - sz0 <= 0.1) return;
+      const m = mesh(
+        new THREE.BoxGeometry(sx1 - sx0, 1, sz1 - sz0),
+        [mat.plinth, mat.plinth, zoneMat, mat.trim, mat.plinth, mat.plinth],
+        groups.upper,
+        (sx0 + sx1) / 2, y, (sz0 + sz1) / 2,
+        'upper_slab',
+      );
+      if (R.upperName) {
+        m.userData = {
+          name: R.upperName, dim: R.upperDim || '', zone: 'Upper floor',
+          level: 'Upper floor, ' + (GROUND_FLOOR_H + 1) + ' ft above ground floor',
+          note: 'Layout of this floor was not provided; shown as open floor.',
+        };
+        pickables.push(m);
+      }
+    };
+
+    if (!R.void) {
+      slab(left, top, right, bottom); // solid upper floor
+    } else if (R.void !== 'all') {
+      // four slabs around the double-height opening
+      const [v0, w0, v1, w1] = [planX(R.void[0]), planZ(R.void[1]), planX(R.void[2]), planZ(R.void[3])];
+      slab(left, top, right, w0);
+      slab(left, w1, right, bottom);
+      slab(left, w0, v0, w1);
+      slab(v1, w0, right, w1);
+      // glass railing round the opening
       [[[v0, w0], [v1, w0]], [[v1, w0], [v1, w1]], [[v1, w1], [v0, w1]], [[v0, w1], [v0, w0]]].forEach(([p, q]) => {
-        seg2(p, q, 0.15, 3.3, y + 0.5, M.glass, G.upper, 'void_railing_glass');
-        seg2(p, q, 0.35, 0.25, y + 0.5 + 3.3, M.rail, G.upper, 'void_railing_top');
+        segment(p, q, 0.15, 3.3, y + 0.5, mat.glass, groups.upper, 'void_railing_glass');
+        segment(p, q, 0.35, 0.25, y + 0.5 + 3.3, mat.rail, groups.upper, 'void_railing_top');
       });
-      if (R.upperName) labels.push({ name: R.upperName, dim: '', upper: true, x: (v0 + v1) / 2, y: fl + GF + 5, z: w0 - 4 });
+      if (R.upperName) labels.push({ name: R.upperName, dim: '', upper: true, x: (v0 + v1) / 2, y: floor + GROUND_FLOOR_H + 5, z: w0 - 4 });
     }
   }
 
+  /** Decorative roof edge: cornice, low wall, coping and a row of small diamond ornaments. */
   function parapet(x0, z0, x1, z1, y, sides) {
     sides = sides === true ? 'NSEW' : sides;
-    const e = [], o = 0.4;
-    if (sides.includes('N')) e.push([[x0 - o, z0 - o], [x1 + o, z0 - o], [0, -1]]);
-    if (sides.includes('S')) e.push([[x0 - o, z1 + o], [x1 + o, z1 + o], [0, 1]]);
-    if (sides.includes('W')) e.push([[x0 - o, z0 - o], [x0 - o, z1 + o], [-1, 0]]);
-    if (sides.includes('E')) e.push([[x1 + o, z0 - o], [x1 + o, z1 + o], [1, 0]]);
-    e.forEach(([p, q, n]) => {
-      seg2(p, q, 1.6, 0.8, y - 1.6, M.trim, G.roofs, 'cornice');
-      seg2(p, q, 0.9, 3.2, y - 0.8, M.wall, G.roofs, 'parapet');
-      seg2(p, q, 1.5, 0.45, y + 2.4, M.trim, G.roofs, 'coping');
-      const L = Math.hypot(q[0] - p[0], q[1] - p[1]), N = Math.floor(L / 5.5);
-      for (let i = 1; i < N; i++) {
-        const f = i / N, x = p[0] + (q[0] - p[0]) * f + n[0] * 0.95, z = p[1] + (q[1] - p[1]) * f + n[1] * 0.95;
-        const orn = box(n[0] ? 0.2 : 0.75, 0.75, n[0] ? 0.75 : 0.2, M.stone, G.roofs, x, y + 0.9, z, 'parapet_ornament');
-        orn.rotation.set(n[0] ? Math.PI / 4 : 0, 0, n[1] ? Math.PI / 4 : 0); orn.castShadow = false;
+    const o = 0.4; // overhang
+    const edges = [];
+    if (sides.includes('N')) edges.push([[x0 - o, z0 - o], [x1 + o, z0 - o], [0, -1]]);
+    if (sides.includes('S')) edges.push([[x0 - o, z1 + o], [x1 + o, z1 + o], [0, 1]]);
+    if (sides.includes('W')) edges.push([[x0 - o, z0 - o], [x0 - o, z1 + o], [-1, 0]]);
+    if (sides.includes('E')) edges.push([[x1 + o, z0 - o], [x1 + o, z1 + o], [1, 0]]);
+
+    edges.forEach(([p, q, outward]) => {
+      segment(p, q, 1.6, 0.8, y - 1.6, mat.trim, groups.roofs, 'cornice');
+      segment(p, q, 0.9, 3.2, y - 0.8, mat.wall, groups.roofs, 'parapet');
+      segment(p, q, 1.5, 0.45, y + 2.4, mat.trim, groups.roofs, 'coping');
+      const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      const count = Math.floor(length / 5.5);
+      for (let i = 1; i < count; i++) {
+        const f = i / count;
+        const x = p[0] + (q[0] - p[0]) * f + outward[0] * 0.95;
+        const z = p[1] + (q[1] - p[1]) * f + outward[1] * 0.95;
+        const ornament = box(outward[0] ? 0.2 : 0.75, 0.75, outward[0] ? 0.75 : 0.2, mat.stone, groups.roofs, x, y + 0.9, z, 'parapet_ornament');
+        ornament.rotation.set(outward[0] ? Math.PI / 4 : 0, 0, outward[1] ? Math.PI / 4 : 0);
+        ornament.castShadow = false;
       }
     });
   }
-  function arch(w, h, depth) {
-    const s = new THREE.Shape(), r = w / 2;
-    s.moveTo(-r, 0); s.lineTo(r, 0); s.lineTo(r, h - r); s.absarc(0, h - r, r, 0, Math.PI, false); s.lineTo(-r, 0);
+
+  // ───────────────────────────────── 5. DECORATIVE HELPERS ─────────────────────────────────
+
+  /** Round-topped arch shape (used for the dome tower's windows). */
+  function roundArch(w, h, depth) {
+    const s = new THREE.Shape();
+    const r = w / 2;
+    s.moveTo(-r, 0);
+    s.lineTo(r, 0);
+    s.lineTo(r, h - r);
+    s.absarc(0, h - r, r, 0, Math.PI, false);
+    s.lineTo(-r, 0);
     return new THREE.ExtrudeGeometry(s, { depth: depth || 0.2, bevelEnabled: false, curveSegments: 16 });
   }
-  function archOnFace(parent, cx, cy, cz, faceAngle, w, h) {
-    [[arch(w + 0.9, h + 0.45, 0.25), M.trim, 0, -0.2], [arch(w, h, 0.3), M.archGlass, 0.08, 0]].forEach(([g, m, off, dy]) => {
-      const mm = new THREE.Mesh(g, m); mm.receiveShadow = true;
-      mm.position.set(cx + Math.sin(faceAngle) * off, cy + dy, cz + Math.cos(faceAngle) * off); mm.rotation.y = faceAngle; mm.name = 'arched_window'; parent.add(mm);
+
+  /** A framed round-arch window stuck onto a face of the dome tower. */
+  function towerWindow(parent, cx, cy, cz, faceAngle, w, h) {
+    [
+      [roundArch(w + 0.9, h + 0.45, 0.25), mat.trim, 0, -0.2], // frame
+      [roundArch(w, h, 0.3), mat.archGlass, 0.08, 0], // glass
+    ].forEach(([geometry, m, out, dy]) => {
+      const piece = new THREE.Mesh(geometry, m);
+      piece.receiveShadow = true;
+      piece.position.set(cx + Math.sin(faceAngle) * out, cy + dy, cz + Math.cos(faceAngle) * out);
+      piece.rotation.y = faceAngle;
+      piece.name = 'arched_window';
+      parent.add(piece);
     });
   }
-  function hipRoof(x0, z0, x1, z1, y, H, o, mat, parent) {
-    const a = [x0 - o, y, z0 - o], b = [x1 + o, y, z0 - o], c = [x1 + o, y, z1 + o], d = [x0 - o, y, z1 + o];
-    const W = (x1 - x0) + 2 * o, cx = (x0 + x1) / 2;
-    const r1 = [cx, y + H, z0 - o + W / 2], r2 = [cx, y + H, z1 + o - W / 2];
-    const tri = [a, r1, b, b, r1, r2, b, r2, c, c, r2, d, d, r2, r1, d, r1, a];
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(tri.flat(), 3)); g.computeVertexNormals();
-    return mesh(g, mat, parent, 0, 0, 0, 'existing_hip_roof');
-  }
-  // flower bed: scatter flowers of several colours (merged per colour) where test(x, z) is true
-  function flowers(test, bounds, y, density, parent, palette, nm) {
+
+  /*
+    Flower bed: scatter flowers wherever test(x, z) is true inside `bounds` [x0, z0, x1, z1].
+    `palette` picks colours from FLOWER. Flowers of one colour are merged into one shape.
+  */
+  function flowers(test, bounds, y, density, parent, palette, name) {
     palette = palette || [0, 1, 2, 3, 4, 5];
-    const per = palette.map(() => []), stems = [];
-    const [bx0, bz0, bx1, bz1] = bounds, step = 1 / Math.sqrt(density);
-    for (let z = bz0; z <= bz1; z += step) for (let x = bx0; x <= bx1; x += step) {
-      const px = x + (rnd() - 0.5) * step, pz = z + (rnd() - 0.5) * step; if (!test(px, pz)) continue;
-      const k = Math.floor(rnd() * per.length), s = 0.35 + rnd() * 0.25;
-      const fg = new THREE.IcosahedronGeometry(s, 0); fg.translate(px, y + 0.9 + rnd() * 0.4, pz); per[k].push(fg);
-      const lg = new THREE.IcosahedronGeometry(0.55, 0); lg.scale(1, 0.6, 1); lg.translate(px, y + 0.35, pz); stems.push(lg);
+    const byColour = palette.map(() => []);
+    const foliage = [];
+    const [bx0, bz0, bx1, bz1] = bounds;
+    const step = 1 / Math.sqrt(density);
+    for (let z = bz0; z <= bz1; z += step) {
+      for (let x = bx0; x <= bx1; x += step) {
+        const px = x + (random() - 0.5) * step;
+        const pz = z + (random() - 0.5) * step;
+        if (!test(px, pz)) continue;
+        const colour = Math.floor(random() * byColour.length);
+        const size = 0.35 + random() * 0.25;
+        const bloom = new THREE.IcosahedronGeometry(size, 0);
+        bloom.translate(px, y + 0.9 + random() * 0.4, pz);
+        byColour[colour].push(bloom);
+        const leaves = new THREE.IcosahedronGeometry(0.55, 0);
+        leaves.scale(1, 0.6, 1);
+        leaves.translate(px, y + 0.35, pz);
+        foliage.push(leaves);
+      }
     }
-    per.forEach((list, i) => { if (list.length) mesh(mergeGeos(list), FLOWER[palette[i]], parent, 0, 0, 0, nm + '_flowers').castShadow = false; });
-    if (stems.length) mesh(mergeGeos(stems), M.hedge, parent, 0, 0, 0, nm + '_foliage').castShadow = false;
-  }
-  function lampPost(x, z, parent) {
-    mesh(new THREE.CylinderGeometry(0.18, 0.25, 12, 10), M.iron, parent, x, 6, z, 'lamp_post');
-    mesh(new THREE.CylinderGeometry(0.55, 0.35, 1.3, 8), M.lamp, parent, x, 12.6, z, 'lamp');
-    mesh(new THREE.ConeGeometry(0.75, 0.7, 8), M.iron, parent, x, 13.6, z, 'lamp_cap');
-  }
-  function hedgeLine(p, q, parent, nm) {
-    const L = Math.hypot(q[0] - p[0], q[1] - p[1]), n = Math.max(1, Math.round(L / 2.2)), hg = [];
-    for (let i = 0; i <= n; i++) { const f = i / n, g = new THREE.IcosahedronGeometry(1.15, 0); g.scale(1, 0.8, 1); g.translate(p[0] + (q[0] - p[0]) * f, 1, p[1] + (q[1] - p[1]) * f); hg.push(g); }
-    mesh(mergeGeos(hg), M.hedge, parent, 0, 0, 0, nm);
+    byColour.forEach((list, i) => {
+      if (list.length) mesh(mergeGeometries(list), FLOWER[palette[i]], parent, 0, 0, 0, name + '_flowers').castShadow = false;
+    });
+    if (foliage.length) mesh(mergeGeometries(foliage), mat.hedge, parent, 0, 0, 0, name + '_foliage').castShadow = false;
   }
 
-  // ═════════ BUILDING ═════════
-  // MASJID
-  room({ name: 'Masjid', dim: "53'0\" × 53'0\"", label: false, zone: 'prayer', r: [329.5, 79, 503.5, 252], fl: 3, two: true, t: TE, lvl: "+3'0\"", lz: 6, parapet: true,
+  function lampPost(x, z, parent) {
+    mesh(new THREE.CylinderGeometry(0.18, 0.25, 12, 10), mat.iron, parent, x, 6, z, 'lamp_post');
+    mesh(new THREE.CylinderGeometry(0.55, 0.35, 1.3, 8), mat.lamp, parent, x, 12.6, z, 'lamp');
+    mesh(new THREE.ConeGeometry(0.75, 0.7, 8), mat.iron, parent, x, 13.6, z, 'lamp_cap');
+  }
+
+  /** A row of clipped hedge from point p to point q. */
+  function hedgeLine(p, q, parent, name) {
+    const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const count = Math.max(1, Math.round(length / 2.2));
+    const bushes = [];
+    for (let i = 0; i <= count; i++) {
+      const f = i / count;
+      const g = new THREE.IcosahedronGeometry(1.15, 0);
+      g.scale(1, 0.8, 1);
+      g.translate(p[0] + (q[0] - p[0]) * f, 1, p[1] + (q[1] - p[1]) * f);
+      bushes.push(g);
+    }
+    mesh(mergeGeometries(bushes), mat.hedge, parent, 0, 0, 0, name);
+  }
+
+  // ───────────────────────────────── 6. THE BUILDING ─────────────────────────────────
+
+  // ── MASJID (prayer hall, two storeys, double-height centre) ──
+  room({
+    name: 'Masjid', dim: "53'0\" × 53'0\"", label: false, zone: 'prayer',
+    r: [329.5, 79, 503.5, 252], fl: 3, two: true, t: WALL_EXTERIOR, lvl: "+3'0\"", lz: 6, parapet: true,
     void: [373.75, 98.75, 458.75, 163.75], upperName: 'Upper gallery', upperDim: "Open to below: 26'2\" × 20'0\"",
     note: 'Prayer hall. The 26\'2" × 20\'0" centre is double height, open to the upper floor. Emergency exits on both sides.',
-    o: [['N', 357.5, 378, 'tall'], ['N', 409.7, 426.3, 'open'], ['N', 453.75, 473.75, 'tall'],
+    o: [
+      ['N', 357.5, 378, 'tall'], ['N', 409.7, 426.3, 'open'], ['N', 453.75, 473.75, 'tall'], // 'open' = the qibla niche
       ['W', 95, 116, 'tall'], ['W', 139, 160, 'tall'], ['W', 182.5, 202.5, 'tall'], ['W', 210, 219], ['W', 210, 219, 'uwin'], ['W', 228, 248, 'win'],
       ['E', 95, 116, 'tall'], ['E', 139, 160, 'tall'], ['E', 182.5, 202.5, 'tall'], ['E', 211, 220], ['E', 232, 247, 'win'],
-      ['S', 360, 377.5, 'gate'], ['S', 407.5, 425, 'gate'], ['S', 455, 472.5, 'gate']] });
-  { // QIBLA — semicircular niche projecting from the qibla wall
-    const mx = PX(418), mz = PZ(79), ri = 2.6, ro = 3.6, fl = 3, H = opt.cut ? opt.cut : 18;
-    const s = new THREE.Shape(); s.absarc(0, 0, ro, 0, Math.PI, false); s.lineTo(-ri, 0); s.absarc(0, 0, ri, Math.PI, 0, true); s.lineTo(ro, 0);
-    const g = new THREE.ExtrudeGeometry(s, { depth: H, bevelEnabled: false, curveSegments: 32 }); g.rotateX(-Math.PI / 2);
-    mesh(g, M.wall, G.walls, mx, fl, mz, 'qibla_wall');
-    const fs = new THREE.Shape(); fs.absarc(0, 0, ri, 0, Math.PI, false); fs.lineTo(ri, 0);
-    const fg = new THREE.ExtrudeGeometry(fs, { depth: 0.08, bevelEnabled: false, curveSegments: 32 }); fg.rotateX(-Math.PI / 2);
-    const fm = mesh(fg, std(ZONES.prayer.c, { roughness: 0.95 }), G.floors, mx, fl, mz + 0.5, 'qibla_floor');
-    fm.userData = { name: 'Qibla', dim: 'Semicircular niche on the qibla wall', zone: 'Prayer', level: "+3'0\"", note: 'Marks the qibla, the direction of prayer.' }; pickables.push(fm);
-    // arched outline inside the niche and a gold band
-    const band = new THREE.Mesh(new THREE.TorusGeometry(ri - 0.05, 0.12, 6, 32, Math.PI), M.gold); band.rotation.x = Math.PI / 2; band.rotation.z = Math.PI; band.position.set(mx, fl + 9, mz); G.furniture.add(band);
+      ['S', 360, 377.5, 'gate'], ['S', 407.5, 425, 'gate'], ['S', 455, 472.5, 'gate'],
+    ],
+  });
+
+  // ── QIBLA — semicircular niche sticking out of the qibla wall ──
+  {
+    const cx = planX(418), cz = planZ(79);
+    const innerR = 2.6, outerR = 3.6, floor = 3;
+    const height = opt.cut ? opt.cut : 18;
+
+    // curved wall: a half-ring raised to full height
+    const ring = new THREE.Shape();
+    ring.absarc(0, 0, outerR, 0, Math.PI, false);
+    ring.lineTo(-innerR, 0);
+    ring.absarc(0, 0, innerR, Math.PI, 0, true);
+    ring.lineTo(outerR, 0);
+    const wallG = new THREE.ExtrudeGeometry(ring, { depth: height, bevelEnabled: false, curveSegments: 32 });
+    wallG.rotateX(-Math.PI / 2);
+    mesh(wallG, mat.wall, groups.walls, cx, floor, cz, 'qibla_wall');
+
+    // floor of the niche (tap for info)
+    const halfDisc = new THREE.Shape();
+    halfDisc.absarc(0, 0, innerR, 0, Math.PI, false);
+    halfDisc.lineTo(innerR, 0);
+    const floorG = new THREE.ExtrudeGeometry(halfDisc, { depth: 0.08, bevelEnabled: false, curveSegments: 32 });
+    floorG.rotateX(-Math.PI / 2);
+    const floorMesh = mesh(floorG, material(ZONES.prayer.c, { roughness: 0.95 }), groups.floors, cx, floor, cz + 0.5, 'qibla_floor');
+    floorMesh.userData = {
+      name: 'Qibla', dim: 'Semicircular niche on the qibla wall', zone: 'Prayer', level: "+3'0\"",
+      note: 'Marks the qibla, the direction of prayer.',
+    };
+    pickables.push(floorMesh);
+
+    // gold band inside the niche
+    const band = new THREE.Mesh(new THREE.TorusGeometry(innerR - 0.05, 0.12, 6, 32, Math.PI), mat.gold);
+    band.rotation.x = Math.PI / 2;
+    band.rotation.z = Math.PI;
+    band.position.set(cx, floor + 9, cz);
+    groups.furniture.add(band);
+
+    // cornice, half-dome and gold finial on top
     if (!opt.cut) {
-      const cap = new THREE.ExtrudeGeometry((() => { const c2 = new THREE.Shape(); c2.absarc(0, 0, ro + 0.4, 0, Math.PI, false); c2.lineTo(ro + 0.4, 0); return c2; })(), { depth: 0.8, bevelEnabled: false, curveSegments: 32 });
-      cap.rotateX(-Math.PI / 2); mesh(cap, M.trim, G.roofs, mx, fl + H, mz, 'qibla_cornice');
-      mesh(new THREE.SphereGeometry(ro, 32, 12, Math.PI, Math.PI, 0, Math.PI / 2), M.dome, G.roofs, mx, fl + H + 0.8, mz, 'qibla_semidome');
-      mesh(new THREE.LatheGeometry([[0, 0], [0.25, 0], [0.3, 0.3], [0.12, 0.55], [0.05, 1.4], [0, 1.7]].map(q => new THREE.Vector2(q[0], q[1])), 12), M.gold, G.roofs, mx, fl + H + 0.8 + ro - 0.1, mz - 0.6, 'qibla_finial');
+      const capShape = new THREE.Shape();
+      capShape.absarc(0, 0, outerR + 0.4, 0, Math.PI, false);
+      capShape.lineTo(outerR + 0.4, 0);
+      const cap = new THREE.ExtrudeGeometry(capShape, { depth: 0.8, bevelEnabled: false, curveSegments: 32 });
+      cap.rotateX(-Math.PI / 2);
+      mesh(cap, mat.trim, groups.roofs, cx, floor + height, cz, 'qibla_cornice');
+      mesh(new THREE.SphereGeometry(outerR, 32, 12, Math.PI, Math.PI, 0, Math.PI / 2), mat.dome, groups.roofs, cx, floor + height + 0.8, cz, 'qibla_semidome');
+      mesh(
+        new THREE.LatheGeometry(profile([[0, 0], [0.25, 0], [0.3, 0.3], [0.12, 0.55], [0.05, 1.4], [0, 1.7]]), 12),
+        mat.gold, groups.roofs, cx, floor + height + 0.8 + outerR - 0.1, cz - 0.6, 'qibla_finial',
+      );
     }
-    labels.push({ name: 'Qibla', dim: '', x: mx, y: fl + 5, z: mz - 1.5 });
+    labels.push({ name: 'Qibla', dim: '', x: cx, y: floor + 5, z: cz - 1.5 });
   }
-  room({ name: 'Sound Control Room', dim: "7'6\" × 9'0\"", zone: 'admin', r: [503.5, 223.75, 528, 252], nw: ['W'], fl: 3, two: true, lvl: "+3'0\"", parapet: 'NE',
-    note: 'Has a window looking into the Masjid.', o: [['S', 519, 528], ['N', 510, 526, 'win']] });
 
-  // SAHAN, LOBBY, ENTRY
-  const gatesX = [['N', 360, 377.5, 'gate'], ['N', 407.5, 425, 'gate'], ['N', 455, 472.5, 'gate']];
-  room({ name: 'Sahan 1', dim: "53'0\" × 38'0\"", label: false, zone: 'sahan', r: [329.5, 252, 503.5, 376.5], fl: 2.5, two: true, t: TE, lvl: "+2'6\"", lz: 6, parapet: 'W',
+  room({
+    name: 'Sound Control Room', dim: "7'6\" × 9'0\"", zone: 'admin',
+    r: [503.5, 223.75, 528, 252], nw: ['W'], fl: 3, two: true, lvl: "+3'0\"", parapet: 'NE',
+    note: 'Has a window looking into the Masjid.',
+    o: [['S', 519, 528], ['N', 510, 526, 'win']],
+  });
+
+  // ── SAHAN, LOBBY AND MAIN ENTRANCE ──
+  const sahanGates = [['N', 360, 377.5, 'gate'], ['N', 407.5, 425, 'gate'], ['N', 455, 472.5, 'gate']];
+  room({
+    name: 'Sahan 1', dim: "53'0\" × 38'0\"", label: false, zone: 'sahan',
+    r: [329.5, 252, 503.5, 376.5], fl: 2.5, two: true, t: WALL_EXTERIOR, lvl: "+2'6\"", lz: 6, parapet: 'W',
     void: [391.75, 296.75, 440.75, 332], upperName: 'Upper floor', note: 'Courtyard hall with a double-height opening in the centre.',
-    o: gatesX.concat(gatesX.map(g => ['S', g[1], g[2], 'gate']),
-      [['W', 256, 275, 'gate'], ['W', 305, 324, 'gate'], ['W', 354, 372.5, 'gate'], ['W', 256, 275, 'uwin'], ['W', 305, 324, 'uwin'], ['W', 354, 372.5, 'uwin'], ['E', 254, 266], ['E', 330, 340]]) });
-  room({ name: 'Lobby', zone: 'circ', r: [329.5, 376.5, 501, 397], fl: 2.5, two: true, label: false, parapet: 'W',
-    o: gatesX.concat([['S', 336, 352.5], ['S', 380, 450, 'open2'], ['S', 483.75, 498.75], ['E', 381, 393], ['W', 380, 393, 'uwin']]) });
-  room({ name: 'Men Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [329.5, 397, 380, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'SW', o: [['N', 336, 352.5], ['E', 427, 435], ['S', 343.75, 365, 'win']] });
-  room({ name: 'Main Entrance', dim: "21'0\" × 11'7\" (double height)", zone: 'circ', r: [380, 397, 450, 435], fl: 2.5, two: true, void: 'all', nw: ['N'], lvl: "+2'6\"", parapet: 'S',
-    o: [['S', 397.5, 435, 'gdoor'], ['S', 393, 437, 'uwin'], ['W', 427, 435], ['E', 427, 435]] });
-  room({ name: 'Women Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [450, 397, 501, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'S', o: [['N', 483.75, 498.75], ['W', 427, 435], ['S', 468.75, 487.5, 'win']] });
-  room({ name: 'Threshold', dim: "21'0\" × 11'1\"", zone: 'circ', r: [375, 435, 456, 481], fl: 2, nw: ['N', 'S', 'E', 'W'], roof: false, lvl: "+2'0\"", note: 'Covered entrance porch with steps down to the entry plaza.' });
+    o: sahanGates.concat(
+      sahanGates.map((g) => ['S', g[1], g[2], 'gate']),
+      [
+        ['W', 256, 275, 'gate'], ['W', 305, 324, 'gate'], ['W', 354, 372.5, 'gate'],
+        ['W', 256, 275, 'uwin'], ['W', 305, 324, 'uwin'], ['W', 354, 372.5, 'uwin'],
+        ['E', 254, 266], ['E', 330, 340],
+      ],
+    ),
+  });
+  room({
+    name: 'Lobby', zone: 'circ', r: [329.5, 376.5, 501, 397], fl: 2.5, two: true, label: false, parapet: 'W',
+    o: sahanGates.concat([['S', 336, 352.5], ['S', 380, 450, 'open2'], ['S', 483.75, 498.75], ['E', 381, 393], ['W', 380, 393, 'uwin']]),
+  });
+  room({
+    name: 'Men Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [329.5, 397, 380, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'SW',
+    o: [['N', 336, 352.5], ['E', 427, 435], ['S', 343.75, 365, 'win']],
+  });
+  room({
+    name: 'Main Entrance', dim: "21'0\" × 11'7\" (double height)", zone: 'circ',
+    r: [380, 397, 450, 435], fl: 2.5, two: true, void: 'all', nw: ['N'], lvl: "+2'6\"", parapet: 'S',
+    o: [['S', 397.5, 435, 'gdoor'], ['S', 393, 437, 'uwin'], ['W', 427, 435], ['E', 427, 435]],
+  });
+  room({
+    name: 'Women Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [450, 397, 501, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'S',
+    o: [['N', 483.75, 498.75], ['W', 427, 435], ['S', 468.75, 487.5, 'win']],
+  });
+  room({
+    name: 'Threshold', dim: "21'0\" × 11'1\"", zone: 'circ', r: [375, 435, 456, 481], fl: 2, nw: ['N', 'S', 'E', 'W'], roof: false, lvl: "+2'0\"",
+    note: 'Covered entrance porch with steps down to the entry plaza.',
+  });
 
-  // SERVICE WING
+  // ── SERVICE WING (right of the Sahan) ──
   room({ name: 'Setting Hall', dim: "10'0\" × 22'9\"", zone: 'admin', r: [504, 252, 536.25, 326.25], fl: 2.5, two: true, o: [['W', 254, 266], ['E', 313.75, 325]] });
   room({ name: 'Dress Up', dim: "4'6\" × 7'4\"", zone: 'wet', r: [536.25, 252, 552.5, 278], fl: 2.5, two: true, parapet: 'N', o: [['S', 541, 548.75]] });
   room({ name: 'VIP Restroom', dim: "9'0\" × 7'4\"", zone: 'wet', wc: true, r: [552.5, 252, 586, 278], fl: 2.5, two: true, parapet: 'NE', o: [['S', 552.5, 562.5], ['N', 565, 578, 'uwin']] });
-  room({ name: 'VIP Master Room', dim: "14'0\" × 15'0\"", zone: 'admin', r: [536.25, 278, 586, 327.5], fl: 2.5, two: true, parapet: 'E', o: [['N', 541, 548.75], ['N', 552.5, 562.5], ['W', 313.75, 325], ['E', 282.5, 303.75, 'win']] });
+  room({
+    name: 'VIP Master Room', dim: "14'0\" × 15'0\"", zone: 'admin', r: [536.25, 278, 586, 327.5], fl: 2.5, two: true, parapet: 'E',
+    o: [['N', 541, 548.75], ['N', 552.5, 562.5], ['W', 313.75, 325], ['E', 282.5, 303.75, 'win']],
+  });
   room({ name: 'Men Ablution', dim: "10'0\" × 5'9\"", zone: 'wet', r: [504, 327.5, 536.25, 348.75], fl: 2.5, two: true, o: [['W', 330, 340], ['S', 506, 516], ['S', 522, 532]] });
   room({ id: 'MRR1', name: 'Restroom', dim: "5'0\" × 8'0\"", zone: 'wet', wc: true, label: false, r: [504, 348.75, 520, 378], fl: 2.5, two: true, o: [['N', 506, 516]] });
   room({ id: 'MRR2', name: 'Restroom', dim: "4'6\" × 8'0\"", zone: 'wet', wc: true, label: false, r: [520, 348.75, 536.25, 378], fl: 2.5, two: true, o: [['N', 522, 532]] });
-  room({ name: 'Women Ablution', dim: "14'0\" × 6'5\"", zone: 'wet', r: [536.25, 327.5, 586, 348.75], fl: 2.5, two: true, parapet: 'E', o: [['S', 538, 550, 'open'], ['S', 553, 565], ['S', 570, 582], ['E', 331, 345, 'win']] });
+  room({
+    name: 'Women Ablution', dim: "14'0\" × 6'5\"", zone: 'wet', r: [536.25, 327.5, 586, 348.75], fl: 2.5, two: true, parapet: 'E',
+    o: [['S', 538, 550, 'open'], ['S', 553, 565], ['S', 570, 582], ['E', 331, 345, 'win']],
+  });
   room({ name: 'Women Entry', zone: 'circ', label: false, r: [536.25, 348.75, 551.25, 378], nw: ['N'], fl: 2.5, two: true, o: [['S', 538, 550]] });
   room({ id: 'WRR1', name: 'Restroom', dim: "4'6\" × 8'0\"", zone: 'wet', wc: true, label: false, r: [551.25, 348.75, 568, 378], fl: 2.5, two: true, o: [['N', 553, 565]] });
   room({ id: 'WRR2', name: 'Restroom', dim: "4'6\" × 8'0\"", zone: 'wet', wc: true, label: false, r: [568, 348.75, 586, 378], fl: 2.5, two: true, parapet: 'E', o: [['N', 570, 582]] });
-  room({ name: 'Stairs & Lift', dim: "Lift 5'0\" × 10'0\"", zone: 'circ', r: [501, 378, 550, 462.5], fl: 2.5, two: true, lvl: "+2'6\"", lz: 9, parapet: 'SE',
-    note: 'Stair (6" riser, 12" tread) and lift to the upper floor. Women enter from the north side.', o: [['W', 381, 393], ['N', 538, 549], ['S', 518.75, 537.5, 'win'], ['E', 420, 440, 'win']] });
+  room({
+    name: 'Stairs & Lift', dim: "Lift 5'0\" × 10'0\"", zone: 'circ', r: [501, 378, 550, 462.5], fl: 2.5, two: true, lvl: "+2'6\"", lz: 9, parapet: 'SE',
+    note: 'Stair (6" riser, 12" tread) and lift to the upper floor. Women enter from the north side.',
+    o: [['W', 381, 393], ['N', 538, 549], ['S', 518.75, 537.5, 'win'], ['E', 420, 440, 'win']],
+  });
 
-  // DINE AREA
-  room({ name: 'Dine Area · Thaal 84', dim: "70'10\" × 69'10\"", label: false, zone: 'dining', r: [100.5, 220, 329.5, 446], fl: 3, h: 18, t: TE, lvl: "+3'0\"", parapet: 'N',
+  // ── DINE AREA (single storey) ──
+  room({
+    name: 'Dine Area · Thaal 84', dim: "70'10\" × 69'10\"", label: false, zone: 'dining',
+    r: [100.5, 220, 329.5, 446], fl: 3, h: 18, t: WALL_EXTERIOR, lvl: "+3'0\"", parapet: 'N',
     note: 'Men & women dining hall seating 84 thaals, with emergency exits on three sides.',
-    o: [['N', 130, 150, 'win'], ['N', 167.5, 187.5, 'win'], ['N', 237, 257, 'win'], ['N', 275, 295, 'win'],
+    o: [
+      ['N', 130, 150, 'win'], ['N', 167.5, 187.5, 'win'], ['N', 237, 257, 'win'], ['N', 275, 295, 'win'],
       ['W', 237.5, 257.5, 'win'], ['W', 281, 301, 'win'], ['W', 310, 319.5], ['W', 321.75, 446, 'open'],
       ['E', 256, 275, 'gate'], ['E', 305, 324, 'gate'], ['E', 354, 372.5, 'gate'],
-      ['S', 110, 190, 'hatch'], ['S', 194, 202.5], ['S', 237.5, 256.25, 'win'], ['S', 275, 294.5, 'win'], ['S', 318.75, 327.5]] });
-  room({ id: 'DineExt', name: 'Dine extension', label: false, zone: 'dining', r: [21, 321.75, 100.5, 446], fl: 3, h: 18, t: TE, nw: ['E'], parapet: 'NW',
-    o: [['N', 52.5, 72.5, 'win'], ['W', 336, 356, 'win'], ['W', 373.75, 395, 'win'], ['W', 426, 436], ['S', 24, 44]] });
-  { const a = PP(23, 425), b = PP(328, 444); box(b[0] - a[0], 0.06, b[1] - a[1], std(0xa07650), G.floors, (a[0] + b[0]) / 2, 3.08, (a[1] + b[1]) / 2, 'service_strip'); }
+      ['S', 110, 190, 'hatch'], ['S', 194, 202.5], ['S', 237.5, 256.25, 'win'], ['S', 275, 294.5, 'win'], ['S', 318.75, 327.5],
+    ],
+  });
+  room({
+    id: 'DineExt', name: 'Dine extension', label: false, zone: 'dining', r: [21, 321.75, 100.5, 446], fl: 3, h: 18, t: WALL_EXTERIOR, nw: ['E'], parapet: 'NW',
+    o: [['N', 52.5, 72.5, 'win'], ['W', 336, 356, 'win'], ['W', 373.75, 395, 'win'], ['W', 426, 436], ['S', 24, 44]],
+  });
+  {
+    // serving strip along the south edge of the dine area
+    const a = planPt(23, 425), b = planPt(328, 444);
+    box(b[0] - a[0], 0.06, b[1] - a[1], material(0xa07650), groups.floors, (a[0] + b[0]) / 2, 3.08, (a[1] + b[1]) / 2, 'service_strip');
+  }
 
-  // MAWAID — section between the dine area and the Madressah
-  const B = { fl: 1, h: 12, roof: false };
-  const R2 = o => room(Object.assign({}, B, o));
-  R2({ name: 'Garden', zone: 'garden', r: [20, 446, 71, 499.5], nw: ['N', 'W', 'E', 'S'], note: 'Landscaped courtyard with a fountain.' });
-  R2({ name: 'Women Ablution (Mawaid)', dim: "10'9\" × 10'4\"", zone: 'wet', r: [71, 446, 105, 482], nw: ['N'], o: [['E', 465, 475], ['W', 470, 478]] });
-  R2({ name: 'Service Area', zone: 'service', r: [105, 446, 192.5, 482], nw: ['N', 'S'], note: 'Three service platforms open onto the dine area; thaal racks and a service window below.', o: [['W', 465, 475], ['E', 455, 465]] });
-  R2({ name: 'Mawaid Entry', zone: 'circ', r: [192.5, 446, 219, 482], nw: ['N'], o: [['W', 455, 465], ['S', 197, 212, 'win'], ['E', 455, 467]] });
-  { const a = PP(71, 446), b = PP(219, 482); box(b[0] - a[0] + 1, 1, b[1] - a[1], M.roof, G.roofs, (a[0] + b[0]) / 2, 1 + 12 + 0.5, (a[1] + b[1]) / 2, 'mawaid_roof'); }
-  parapet(PX(71), PZ(446), PX(219), PZ(482), 1 + 12 + 1, 'E');
+  // ── MAWAID (kitchen & service, between the dine area and the Madressah) ──
+  const MAWAID = { fl: 1, h: 12, roof: false }; // shared settings for this single-storey block
+  const mawaidRoom = (settings) => room(Object.assign({}, MAWAID, settings));
+  mawaidRoom({ name: 'Garden', zone: 'garden', r: [20, 446, 71, 499.5], nw: ['N', 'W', 'E', 'S'], note: 'Landscaped courtyard with a fountain.' });
+  mawaidRoom({ name: 'Women Ablution (Mawaid)', dim: "10'9\" × 10'4\"", zone: 'wet', r: [71, 446, 105, 482], nw: ['N'], o: [['E', 465, 475], ['W', 470, 478]] });
+  mawaidRoom({
+    name: 'Service Area', zone: 'service', r: [105, 446, 192.5, 482], nw: ['N', 'S'],
+    note: 'Three service platforms open onto the dine area; thaal racks and a service window below.',
+    o: [['W', 465, 475], ['E', 455, 465]],
+  });
+  mawaidRoom({ name: 'Mawaid Entry', zone: 'circ', r: [192.5, 446, 219, 482], nw: ['N'], o: [['W', 455, 465], ['S', 197, 212, 'win'], ['E', 455, 467]] });
+  {
+    const a = planPt(71, 446), b = planPt(219, 482);
+    box(b[0] - a[0] + 1, 1, b[1] - a[1], mat.roof, groups.roofs, (a[0] + b[0]) / 2, 1 + 12 + 0.5, (a[1] + b[1]) / 2, 'mawaid_roof');
+  }
+  parapet(planX(71), planZ(446), planX(219), planZ(482), 1 + 12 + 1, 'E');
 
-  // EXISTING BUILDING (future Madressah) — 62' × 89' on the drawing, matching the aerial footprint
-  const EXr = [19.5, 482, 219, 767];
-  room({ id: 'MadressahEnv', name: 'Madressah', label: false, out: true, layer: 0, zone: 'edu', r: EXr, fl: 1, h: 12, roof: false, nw: ['N'],
-    o: [['W', 504, 524, 'win'], ['W', 545, 565, 'win'], ['W', 597, 617, 'win'], ['W', 655, 676, 'win'], ['W', 694, 717, 'win'], ['W', 736, 759, 'win'],
+  // ── MADRESSAH (the building already on the site, 62' × 89') ──
+  const MADRESSAH = [19.5, 482, 219, 767];
+  room({
+    id: 'MadressahEnv', name: 'Madressah', label: false, out: true, layer: 0, zone: 'edu',
+    r: MADRESSAH, fl: 1, h: 12, roof: false, nw: ['N'],
+    o: [
+      ['W', 504, 524, 'win'], ['W', 545, 565, 'win'], ['W', 597, 617, 'win'], ['W', 655, 676, 'win'], ['W', 694, 717, 'win'], ['W', 736, 759, 'win'],
       ['S', 32.5, 45, 'win'], ['S', 65.5, 78, 'win'], ['S', 97, 109.5, 'win'], ['S', 129, 141, 'win'], ['S', 161, 173, 'win'], ['S', 193, 205.5, 'win'],
-      ['E', 540, 552], ['E', 568, 580], ['E', 674, 686], ['E', 722, 732], ['E', 742, 754.5, 'win'], ['E', 600, 615, 'win'], ['E', 640, 655, 'win']] });
-  R2({ name: 'Dum Area / Zabiyat Room', dim: "10'2\" × 10'2\"", zone: 'service', r: [72, 482, 105, 516], o: [['E', 500, 508]] });
-  R2({ name: 'Kitchen Grocery Store', dim: "10'2\" × 10'6\"", zone: 'service', r: [72, 530, 107, 566], o: [['N', 85, 95]] });
-  R2({ name: 'Pot Wash Area', dim: "11'6\" × 10'6\"", zone: 'service', r: [107, 530, 145, 566], o: [['N', 110, 140, 'open']] });
-  R2({ name: 'Thaali Receiving', dim: "7'8\" × 9'8\"", zone: 'service', r: [145, 482, 172, 513], o: [['W', 490, 500]] });
-  R2({ name: 'Cold Storage', dim: "7'8\" × 9'8\"", zone: 'service', r: [145, 530, 172, 566], o: [['N', 150, 160]] });
-  R2({ name: 'Kitchen', dim: "13'1\" × 25'8\"", zone: 'service', r: [172, 482, 213, 566], note: 'Separate veg and non-veg prep counters, cutting/chopping and service tables.', o: [['W', 485, 497], ['E', 540, 552]] });
-  R2({ name: 'Aamil Office', dim: "15'6\" × 20'0\"", zone: 'admin', r: [20, 499.5, 72, 566], nw: ['W'], o: [['N', 21, 31], ['E', 552, 562]] });
-  R2({ name: 'Pantry', zone: 'service', r: [20, 578, 46, 586], nw: ['W'], label: false });
-  R2({ name: 'Meeting Room', dim: "15'6\" × 12'4\"", zone: 'admin', r: [20, 587, 74, 628], nw: ['W'], o: [['E', 595, 605]] });
-  R2({ id: 'U1', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [20, 628, 47.5, 657.5], nw: ['W'], label: false, o: [['E', 638, 646]] });
-  R2({ id: 'U2', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [47.5, 628, 74, 657.5], label: false, o: [['E', 633, 643]] });
-  R2({ id: 'U3', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [20, 657.5, 47.5, 687.5], nw: ['W'], label: false, o: [['E', 668, 676]] });
-  R2({ id: 'U4', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [47.5, 657.5, 74, 687.5], label: false, o: [['E', 665, 675]] });
-  R2({ id: 'U5', name: 'Umoor Office', dim: "8'6\" × 11'4\"", zone: 'admin', r: [88, 587, 117, 623], label: false, o: [['W', 600, 612]] });
-  R2({ id: 'U6', name: 'Umoor Office', dim: "8'6\" × 11'4\"", zone: 'admin', r: [117, 587, 145, 623], label: false, o: [['N', 125, 135]] });
-  R2({ id: 'U7', name: 'Umoor Office', dim: "17'6\" × 19'6\"", zone: 'admin', r: [88, 623, 145, 687], o: [['W', 650, 662]] });
-  R2({ name: 'Wash Room', zone: 'wet', r: [146, 587, 202, 673], o: [['N', 150, 158], ['S', 150, 158], ['N', 194, 201]] });
-  const row1 = [[20, 55], [55, 87.5], [87.5, 119.5], [119.5, 151], [164, 214]];
-  row1.forEach(([a, b], i) => R2({ id: 'C1' + i, name: 'Class Room', zone: 'edu', r: [a, 687.5, b, 720], nw: i === 0 ? ['W'] : [], label: i === 4, o: [['S', b - 12, b - 4]] }));
-  const xs = [20, 55, 88, 119.5, 151, 184.5, 217];
-  for (let i = 0; i < 6; i++) R2({ id: 'C2' + i, name: 'Class Room', zone: 'edu', r: [xs[i], 732.5, xs[i + 1], 767], nw: ['S'].concat(i === 0 ? ['W'] : []).concat(i === 5 ? ['E'] : []), label: false, o: [['N', xs[i] + 4, xs[i] + 12]] });
-  { const a = PP(EXr[0], EXr[1]), b = PP(EXr[2], EXr[3]);
-    box(b[0] - a[0] + 2.6, 1, b[1] - a[1] + 1.6, M.roof, G.roofs, (a[0] + b[0]) / 2, 1 + 12 + 0.5, (a[1] + b[1]) / 2 + 0.5, 'madressah_roof');
+      ['E', 540, 552], ['E', 568, 580], ['E', 674, 686], ['E', 722, 732], ['E', 742, 754.5, 'win'], ['E', 600, 615, 'win'], ['E', 640, 655, 'win'],
+    ],
+  });
+  mawaidRoom({ name: 'Dum Area / Zabiyat Room', dim: "10'2\" × 10'2\"", zone: 'service', r: [72, 482, 105, 516], o: [['E', 500, 508]] });
+  mawaidRoom({ name: 'Kitchen Grocery Store', dim: "10'2\" × 10'6\"", zone: 'service', r: [72, 530, 107, 566], o: [['N', 85, 95]] });
+  mawaidRoom({ name: 'Pot Wash Area', dim: "11'6\" × 10'6\"", zone: 'service', r: [107, 530, 145, 566], o: [['N', 110, 140, 'open']] });
+  mawaidRoom({ name: 'Thaali Receiving', dim: "7'8\" × 9'8\"", zone: 'service', r: [145, 482, 172, 513], o: [['W', 490, 500]] });
+  mawaidRoom({ name: 'Cold Storage', dim: "7'8\" × 9'8\"", zone: 'service', r: [145, 530, 172, 566], o: [['N', 150, 160]] });
+  mawaidRoom({
+    name: 'Kitchen', dim: "13'1\" × 25'8\"", zone: 'service', r: [172, 482, 213, 566],
+    note: 'Separate veg and non-veg prep counters, cutting/chopping and service tables.',
+    o: [['W', 485, 497], ['E', 540, 552]],
+  });
+  mawaidRoom({ name: 'Aamil Office', dim: "15'6\" × 20'0\"", zone: 'admin', r: [20, 499.5, 72, 566], nw: ['W'], o: [['N', 21, 31], ['E', 552, 562]] });
+  mawaidRoom({ name: 'Pantry', zone: 'service', r: [20, 578, 46, 586], nw: ['W'], label: false });
+  mawaidRoom({ name: 'Meeting Room', dim: "15'6\" × 12'4\"", zone: 'admin', r: [20, 587, 74, 628], nw: ['W'], o: [['E', 595, 605]] });
+  mawaidRoom({ id: 'U1', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [20, 628, 47.5, 657.5], nw: ['W'], label: false, o: [['E', 638, 646]] });
+  mawaidRoom({ id: 'U2', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [47.5, 628, 74, 657.5], label: false, o: [['E', 633, 643]] });
+  mawaidRoom({ id: 'U3', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [20, 657.5, 47.5, 687.5], nw: ['W'], label: false, o: [['E', 668, 676]] });
+  mawaidRoom({ id: 'U4', name: 'Umoor Office', dim: "pair, 15'6\" × 9'0\"", zone: 'admin', r: [47.5, 657.5, 74, 687.5], label: false, o: [['E', 665, 675]] });
+  mawaidRoom({ id: 'U5', name: 'Umoor Office', dim: "8'6\" × 11'4\"", zone: 'admin', r: [88, 587, 117, 623], label: false, o: [['W', 600, 612]] });
+  mawaidRoom({ id: 'U6', name: 'Umoor Office', dim: "8'6\" × 11'4\"", zone: 'admin', r: [117, 587, 145, 623], label: false, o: [['N', 125, 135]] });
+  mawaidRoom({ id: 'U7', name: 'Umoor Office', dim: "17'6\" × 19'6\"", zone: 'admin', r: [88, 623, 145, 687], o: [['W', 650, 662]] });
+  mawaidRoom({ name: 'Wash Room', zone: 'wet', r: [146, 587, 202, 673], o: [['N', 150, 158], ['S', 150, 158], ['N', 194, 201]] });
+
+  // Classrooms: a row of 5 and a row of 6.
+  const classRow1 = [[20, 55], [55, 87.5], [87.5, 119.5], [119.5, 151], [164, 214]];
+  classRow1.forEach(([left, right], i) =>
+    mawaidRoom({
+      id: 'C1' + i, name: 'Class Room', zone: 'edu', r: [left, 687.5, right, 720],
+      nw: i === 0 ? ['W'] : [], label: i === 4, o: [['S', right - 12, right - 4]],
+    }),
+  );
+  const classRow2 = [20, 55, 88, 119.5, 151, 184.5, 217]; // edges between the 6 rooms
+  for (let i = 0; i < 6; i++) {
+    mawaidRoom({
+      id: 'C2' + i, name: 'Class Room', zone: 'edu', r: [classRow2[i], 732.5, classRow2[i + 1], 767],
+      nw: ['S'].concat(i === 0 ? ['W'] : []).concat(i === 5 ? ['E'] : []), label: false,
+      o: [['N', classRow2[i] + 4, classRow2[i] + 12]],
+    });
+  }
+
+  // Madressah roof, roof edge and front canopy.
+  {
+    const a = planPt(MADRESSAH[0], MADRESSAH[1]), b = planPt(MADRESSAH[2], MADRESSAH[3]);
+    box(b[0] - a[0] + 2.6, 1, b[1] - a[1] + 1.6, mat.roof, groups.roofs, (a[0] + b[0]) / 2, 1 + 12 + 0.5, (a[1] + b[1]) / 2 + 0.5, 'madressah_roof');
     if (!opt.cut) parapet(a[0] - 1, a[1], b[0] + 1, b[1] + 1, 1 + 12 + 1, 'WSE');
     if (!opt.cut) {
-      box(5, 0.6, PZ(740) - PZ(560), M.trim, G.roofs, b[0] + 3.6, 1 + 9.3, (PZ(560) + PZ(740)) / 2, 'madressah_canopy');
-      [570, 620, 680, 730].forEach(y => mesh(new THREE.CylinderGeometry(0.35, 0.35, 9, 10), M.trim, G.walls, b[0] + 5.6, 1 + 4.5, PZ(y), 'canopy_post'));
+      box(5, 0.6, planZ(740) - planZ(560), mat.trim, groups.roofs, b[0] + 3.6, 1 + 9.3, (planZ(560) + planZ(740)) / 2, 'madressah_canopy');
+      [570, 620, 680, 730].forEach((py) =>
+        mesh(new THREE.CylinderGeometry(0.35, 0.35, 9, 10), mat.trim, groups.walls, b[0] + 5.6, 1 + 4.5, planZ(py), 'canopy_post'),
+      );
     }
   }
 
-  // DOME — square tower, arched lantern, dome, gold finial (after the reference photo)
-  const mcx = PX(416.25), mcz = PZ(131.25), mTop = 3 + TWO + 1;
+  // ───────────────────────────────── 7. DOME, ENTRANCE, RAMP, STAIRS, FURNITURE ─────────────────────────────────
+
+  // ── MAIN DOME: square tower → arched lantern → dome → gold finial (from the reference photo) ──
+  const domeX = planX(416.25), domeZ = planZ(131.25);
+  const masjidRoofTop = 3 + TWO_STOREY_H + 1;
   if (!opt.cut) {
-    const tw = 26, tH = 9, tg = G.dome;
-    box(tw, tH, tw, M.wall, tg, mcx, mTop + tH / 2, mcz, 'dome_tower');
-    for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2; archOnFace(tg, mcx + Math.sin(ang) * (tw / 2 + 0.02), mTop + 1.5, mcz + Math.cos(ang) * (tw / 2 + 0.02), ang, 3.6, 6.2); }
-    let y = mTop + tH;
-    box(tw + 2.4, 0.7, tw + 2.4, M.trim, tg, mcx, y + 0.35, mcz, 'tower_cornice');
-    box(tw + 3.0, 0.5, tw + 3.0, M.trim, tg, mcx, y + 0.95, mcz, 'tower_coping');
+    const D = groups.dome;
+    const towerW = 26, towerH = 9;
+    box(towerW, towerH, towerW, mat.wall, D, domeX, masjidRoofTop + towerH / 2, domeZ, 'dome_tower');
+    for (let face = 0; face < 4; face++) {
+      const ang = (face * Math.PI) / 2;
+      towerWindow(D, domeX + Math.sin(ang) * (towerW / 2 + 0.02), masjidRoofTop + 1.5, domeZ + Math.cos(ang) * (towerW / 2 + 0.02), ang, 3.6, 6.2);
+    }
+    let y = masjidRoofTop + towerH;
+    box(towerW + 2.4, 0.7, towerW + 2.4, mat.trim, D, domeX, y + 0.35, domeZ, 'tower_cornice');
+    box(towerW + 3.0, 0.5, towerW + 3.0, mat.trim, D, domeX, y + 0.95, domeZ, 'tower_coping');
     y += 1.2;
-    const lw = 17, lH = 11;
-    box(lw, lH, lw, M.wall, tg, mcx, y + lH / 2, mcz, 'lantern');
-    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b]) => box(1.5, lH, 1.5, M.stone, tg, mcx + a * (lw / 2 - 0.4), y + lH / 2, mcz + b * (lw / 2 - 0.4), 'lantern_pilaster'));
-    for (let f = 0; f < 4; f++) {
-      const ang = f * Math.PI / 2, nx = Math.sin(ang), nz = Math.cos(ang), tx = Math.cos(ang), tz = -Math.sin(ang);
-      [-3.4, 3.4].forEach(off => archOnFace(tg, mcx + nx * (lw / 2 + 0.02) + tx * off, y + 1.6, mcz + nz * (lw / 2 + 0.02) + tz * off, ang, 3.0, 7.2));
+
+    // lantern: smaller square stage with two arched windows on each face
+    const lanternW = 17, lanternH = 11;
+    box(lanternW, lanternH, lanternW, mat.wall, D, domeX, y + lanternH / 2, domeZ, 'lantern');
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b]) =>
+      box(1.5, lanternH, 1.5, mat.stone, D, domeX + a * (lanternW / 2 - 0.4), y + lanternH / 2, domeZ + b * (lanternW / 2 - 0.4), 'lantern_pilaster'),
+    );
+    for (let face = 0; face < 4; face++) {
+      const ang = (face * Math.PI) / 2;
+      const nx = Math.sin(ang), nz = Math.cos(ang); // out of the face
+      const tx = Math.cos(ang), tz = -Math.sin(ang); // along the face
+      [-3.4, 3.4].forEach((offset) =>
+        towerWindow(D, domeX + nx * (lanternW / 2 + 0.02) + tx * offset, y + 1.6, domeZ + nz * (lanternW / 2 + 0.02) + tz * offset, ang, 3.0, 7.2),
+      );
     }
-    y += lH;
-    box(lw + 1.6, 0.6, lw + 1.6, M.trim, tg, mcx, y + 0.3, mcz, 'lantern_cornice');
-    box(lw + 2.2, 0.4, lw + 2.2, M.trim, tg, mcx, y + 0.8, mcz, 'lantern_coping');
+    y += lanternH;
+    box(lanternW + 1.6, 0.6, lanternW + 1.6, mat.trim, D, domeX, y + 0.3, domeZ, 'lantern_cornice');
+    box(lanternW + 2.2, 0.4, lanternW + 2.2, mat.trim, D, domeX, y + 0.8, domeZ, 'lantern_coping');
     y += 1.0;
-    mesh(new THREE.CylinderGeometry(7.9, 8.1, 0.8, 48), M.trim, tg, mcx, y + 0.4, mcz, 'dome_ring');
+    mesh(new THREE.CylinderGeometry(7.9, 8.1, 0.8, 48), mat.trim, D, domeX, y + 0.4, domeZ, 'dome_ring');
     y += 0.8;
-    const prof = [[0, 0], [7.6, 0], [7.85, 1.2], [7.85, 2.6], [7.6, 4.2], [7.0, 6.0], [6.0, 7.9], [4.7, 9.6], [3.2, 11.0], [1.8, 12.0], [0.7, 12.6], [0, 12.8]].map(p => new THREE.Vector2(p[0], p[1]));
-    mesh(new THREE.LatheGeometry(prof, 64), M.dome, tg, mcx, y, mcz, 'dome');
+
+    // the dome itself: a slightly tall, softly pointed profile
+    const domeShape = profile([[0, 0], [7.6, 0], [7.85, 1.2], [7.85, 2.6], [7.6, 4.2], [7.0, 6.0], [6.0, 7.9], [4.7, 9.6], [3.2, 11.0], [1.8, 12.0], [0.7, 12.6], [0, 12.8]]);
+    mesh(new THREE.LatheGeometry(domeShape, 64), mat.dome, D, domeX, y, domeZ, 'dome');
     y += 12.6;
-    const fin = [[0, 0], [0.9, 0], [0.9, 0.3], [0.45, 0.55], [0.8, 0.9], [0.95, 1.3], [0.8, 1.7], [0.3, 2.0], [0.55, 2.3], [0.6, 2.55], [0.3, 2.8], [0.42, 3.0], [0.42, 3.2], [0.2, 3.4], [0.12, 4.6], [0, 6.2]].map(p => new THREE.Vector2(p[0], p[1]));
-    mesh(new THREE.LatheGeometry(fin, 24), M.gold, tg, mcx, y, mcz, 'finial');
+    const finialShape = profile([[0, 0], [0.9, 0], [0.9, 0.3], [0.45, 0.55], [0.8, 0.9], [0.95, 1.3], [0.8, 1.7], [0.3, 2.0], [0.55, 2.3], [0.6, 2.55], [0.3, 2.8], [0.42, 3.0], [0.42, 3.2], [0.2, 3.4], [0.12, 4.6], [0, 6.2]]);
+    mesh(new THREE.LatheGeometry(finialShape, 24), mat.gold, D, domeX, y, domeZ, 'finial');
   }
 
-  // ENTRANCE PORCH: columns at the foyer face and the front, canopy, steps
-  const thr = { x0: PX(375), x1: PX(456), z0: PZ(435), z1: PZ(481) }, ecx = (thr.x0 + thr.x1) / 2;
-  [[PX(385), PZ(441)], [PX(446), PZ(441)], [thr.x0 + 1.2, thr.z1 - 1.2], [thr.x1 - 1.2, thr.z1 - 1.2]].forEach(([x, z]) => {
-    const ch = opt.cut ? opt.cut : 14; mesh(new THREE.CylinderGeometry(0.85, 0.95, ch, 20), M.stone, G.walls, x, 2 + ch / 2, z, 'porch_column');
+  // ── ENTRANCE PORCH: columns, canopy and steps ──
+  const porch = { x0: planX(375), x1: planX(456), z0: planZ(435), z1: planZ(481) };
+  const entranceX = (porch.x0 + porch.x1) / 2; // centre line of the main entrance
+  [[planX(385), planZ(441)], [planX(446), planZ(441)], [porch.x0 + 1.2, porch.z1 - 1.2], [porch.x1 - 1.2, porch.z1 - 1.2]].forEach(([x, z]) => {
+    const h = opt.cut ? opt.cut : 14;
+    mesh(new THREE.CylinderGeometry(0.85, 0.95, h, 20), mat.stone, groups.walls, x, 2 + h / 2, z, 'porch_column');
   });
   if (!opt.cut) {
-    box(thr.x1 - thr.x0 + 1.5, 1.4, thr.z1 - thr.z0 + 1, M.trim, G.roofs, ecx, 16.7, (thr.z0 + thr.z1) / 2, 'porch_canopy');
-    box(thr.x1 - thr.x0 + 2.5, 0.5, thr.z1 - thr.z0 + 2, M.trim, G.roofs, ecx, 17.6, (thr.z0 + thr.z1) / 2, 'porch_coping');
+    box(porch.x1 - porch.x0 + 1.5, 1.4, porch.z1 - porch.z0 + 1, mat.trim, groups.roofs, entranceX, 16.7, (porch.z0 + porch.z1) / 2, 'porch_canopy');
+    box(porch.x1 - porch.x0 + 2.5, 0.5, porch.z1 - porch.z0 + 2, mat.trim, groups.roofs, entranceX, 17.6, (porch.z0 + porch.z1) / 2, 'porch_coping');
   }
-  for (let i = 0; i < 4; i++) box(thr.x1 - thr.x0, 0.5, 1.1, M.pave, G.site, ecx, 0.25 + (3 - i) * 0.5, thr.z1 + 0.55 + i * 1.1, 'step');
-  const stepsEnd = thr.z1 + 4.4;
-  { // ACCESSIBLE RAMP — 1:12 slope, 5 ft wide, along the building front from the porch down to a landing, then a walk to the plaza
-    const top = 2, len = top * 12, zr0 = PZ(450) + 2.4, zr1 = zr0 + 5, xTop = thr.x0, xBot = xTop - len;
-    const pr = new THREE.Shape(); pr.moveTo(0, 0); pr.lineTo(len, 0); pr.lineTo(len, top); pr.lineTo(0, 0.02);
-    const rg = new THREE.ExtrudeGeometry(pr, { depth: zr1 - zr0, bevelEnabled: false }); mesh(rg, M.pave, G.site, xBot, 0, zr0, 'ramp');
-    flat([[xBot - 5, zr0], [xBot, zr0], [xBot, zr1], [xBot - 5, zr1]], 0, M.pave, G.site, 'ramp_landing', 0.12);
-    const ang = Math.atan2(top, len), hl = Math.hypot(len, top);
-    [zr0 + 0.15, zr1 - 0.15].forEach(z => {
-      for (let i = 0; i <= 6; i++) { const x = xBot + len * i / 6, y = top * i / 6; mesh(new THREE.CylinderGeometry(0.07, 0.07, 3, 8), M.doorFrame, G.site, x, y + 1.5, z, 'ramp_post'); }
-      const h = mesh(new THREE.CylinderGeometry(0.09, 0.09, hl + 1, 8), M.doorFrame, G.site, xBot + len / 2, top / 2 + 3, z, 'ramp_handrail'); h.rotation.z = Math.PI / 2 - ang;
-      const m2 = mesh(new THREE.CylinderGeometry(0.05, 0.05, hl, 8), M.doorFrame, G.site, xBot + len / 2, top / 2 + 1.6, z, 'ramp_midrail'); m2.rotation.z = Math.PI / 2 - ang;
-    });
-    // walk from the landing to the entry plaza
-    flat([[xBot - 5, zr1], [xBot, zr1], [xBot, stepsEnd + 4], [xBot - 5, stepsEnd + 4]], 0, M.pave, G.site, 'ramp_walk', 0.12);
-    flat([[xBot - 5, stepsEnd], [ecx - 21, stepsEnd], [ecx - 21, stepsEnd + 4], [xBot - 5, stepsEnd + 4]], 0, M.pave, G.site, 'ramp_walk', 0.12);
-    labels.push({ name: 'Ramp', dim: '1:12 slope', site: true, x: xBot + len / 2, y: 6, z: (zr0 + zr1) / 2 });
+  for (let i = 0; i < 4; i++) {
+    box(porch.x1 - porch.x0, 0.5, 1.1, mat.pave, groups.site, entranceX, 0.25 + (3 - i) * 0.5, porch.z1 + 0.55 + i * 1.1, 'step');
   }
+  const stepsEnd = porch.z1 + 4.4; // where the bottom step meets the plaza
 
-  // STAIRS & LIFT (up flight on the east, down flight on the west, landing at the north)
-  for (let i = 0; i < 15; i++) {
-    box(PX(549) - PX(540), 0.5, 1, M.pave, G.furniture, (PX(540) + PX(549)) / 2, 2.5 + (i + 1) * 0.5 - 0.25, PZ(450) - i, 'stair');
-    box(PX(524) - PX(504), 0.5, 1, M.pave, G.furniture, (PX(504) + PX(524)) / 2, 2.5 + 7.5 + (i + 1) * 0.5 - 0.25, PZ(450) - 14 + i, 'stair');
-  }
-  box(PX(549) - PX(504), 0.5, 3.5, M.pave, G.furniture, (PX(504) + PX(549)) / 2, 2.5 + 7.5 - 0.25, PZ(450) - 16.5, 'landing');
-  const shaftH = opt.cut ? opt.cut : TWO + 3;
-  box(PX(538.75) - PX(526), shaftH, PZ(442.5) - PZ(410), M.dark, G.walls, (PX(526) + PX(538.75)) / 2, 2.5 + shaftH / 2, (PZ(410) + PZ(442.5)) / 2, 'lift_shaft');
-
-  // FURNITURE
-  if (opt.furniture) {
-    const F = G.furniture;
-    for (let py = 92; py <= 245; py += 12.8) box(PX(500) - PX(333), 0.04, 0.25, M.saff, F, (PX(333) + PX(500)) / 2, 3.1, PZ(py), 'saff_line');
-    for (let i = 0; i < 4; i++) box(3, 1 + i, 1.2, M.wood, F, PX(437), 3.5 + i * 0.5, PZ(84) + 1 + i * 1.2, 'minbar');
-    const thGeo = new THREE.CylinderGeometry(2.4, 2.4, 0.25, 24), standGeo = new THREE.CylinderGeometry(0.9, 1.1, 0.9, 12);
-    for (let r = 0; r < 7; r++) for (let c = 0; c < 12; c++) { const x = PX(113 + c * 18.5), z = PZ(236 + r * 27); mesh(standGeo, M.wood, F, x, 3.5, z, 'thaal_stand'); mesh(thGeo, M.brass, F, x, 4.05, z, 'thaal'); }
-    for (let r = 0; r < 5; r++) for (let c = 0; c < 2; c++) mesh(new THREE.CylinderGeometry(1.6, 1.6, 5.5, 18), M.steel, F, PX(111 + c * 6), 1 + 2.75, PZ(461 + r * 12), 'thaal_rack');
-    [[110, 135], [137, 162], [164, 190]].forEach(([a, b]) => box(PX(b) - PX(a), 3, 1.8, M.steel, F, (PX(a) + PX(b)) / 2, 2.5, PZ(450), 'service_platform'));
-    box(PX(140) - PX(117), 3, 0.8, std(0x5aa86a), F, (PX(117) + PX(140)) / 2, 2.5, PZ(480), 'service_window_counter');
-    box(PX(180) - PX(174), 3, PZ(564) - PZ(487), M.steel, F, (PX(174) + PX(180)) / 2, 2.5, (PZ(487) + PZ(564)) / 2, 'prep_counter_veg_nonveg');
-    box(PX(211) - PX(206), 3, PZ(560) - PZ(486), M.steel, F, (PX(206) + PX(211)) / 2, 2.5, (PZ(486) + PZ(560)) / 2, 'kitchen_counter');
-    box(PX(203) - PX(196), 3, PZ(532) - PZ(505), M.steel, F, (PX(196) + PX(203)) / 2, 2.5, (PZ(505) + PZ(532)) / 2, 'cooking_range');
-    [595, 617, 638, 660].forEach(y => box(PX(201) - PX(180), 7, 0.3, M.dark, F, (PX(180) + PX(201)) / 2, 4.5, PZ(y), 'stall'));
-    [604, 626, 646, 666].forEach(y => toilet(PX(188), 1, PZ(y)));
-    const desk = (x, z) => box(3.4, 2.5, 1.8, M.wood, F, x, 2.25, z, 'desk');
-    row1.forEach(([a, b]) => { for (let k = 0; k < 2; k++) for (let j = 0; j < 2; j++) desk(PX(a + (b - a) * (0.3 + 0.4 * k)), PZ(696 + j * 13)); });
-    for (let i = 0; i < 6; i++) for (let k = 0; k < 2; k++) for (let j = 0; j < 3; j++) desk(PX(xs[i] + (xs[i + 1] - xs[i]) * (0.3 + 0.4 * k)), PZ(741 + j * 9));
-    box(8, 2.6, 3, M.wood, F, PX(46), 2.3, PZ(517), 'aamil_desk');
-    box(9, 2.2, 3, std(0x6b5a4a), F, PX(46), 2.1, PZ(555), 'aamil_sofa');
-    box(9, 2.5, 4, M.wood, F, PX(47), 2.25, PZ(608), 'meeting_table');
-    [[90, 99], [102, 111], [114, 123]].forEach(([a, b]) => box(PX(b) - PX(a), 1.6, 1.6, M.brass, F, (PX(a) + PX(b)) / 2, 1.8, PZ(570), 'waiting_bench'));
-    mesh(new THREE.CylinderGeometry(2.6, 2.8, 1.2, 24), M.pave, F, PX(55), 1.6, PZ(480), 'garden_fountain');
-    mesh(new THREE.CylinderGeometry(2.2, 2.2, 0.2, 24), M.water, F, PX(55), 2.15, PZ(480), 'garden_water');
-    [[38, 462], [45, 490], [62, 458], [66, 492], [30, 478]].forEach(([px, py]) => {
-      mesh(new THREE.CylinderGeometry(0.35, 0.45, 5, 8), M.trunk, F, PX(px), 3.5, PZ(py), 'garden_tree');
-      mesh(new THREE.SphereGeometry(2.4, 12, 10), M.leaf, F, PX(px), 7.2, PZ(py), 'garden_tree');
-    });
-  }
-
-  // ═════════ SITE — traced from aerial imagery of 3812 Barney Rd ═════════
-  const K = 0.3048 / 0.4222, C0 = 394.2, C1 = 112.1, exC = PP(119.25, 624.5), A0 = exC[0], A1 = exC[1], UX = [0.35837, 0.93358], UZ = [-0.93358, 0.35837];
-  const U = (u, v) => { const ox = (u / 3 + 175 - C0) / K, oy = (v / 3 - C1) / K; return [A0 + ox * UX[0] + oy * UX[1], A1 + ox * UZ[0] + oy * UZ[1]]; };
-  const UL = a => a.map(p => U(p[0], p[1]));
-  const SITE = G.site, LAND = G.landscape;
-  const ground = box(2600, 0.4, 2600, M.grass, SITE, 100, -0.2, 120, 'ground'); ground.castShadow = false;
-  const clearingU = [[380, 430], [390, 330], [470, 280], [520, 250], [600, 200], [700, 150], [800, 100], [900, 75], [1000, 70], [1100, 100], [1200, 170], [1300, 240], [1345, 300],
-    [1040, 740], [945, 880], [905, 960], [860, 1060], [760, 1060], [640, 985], [520, 925], [400, 860], [300, 760], [230, 700], [215, 600], [290, 560], [370, 520]];
-  flat(UL(clearingU), 0.02, M.lawn, SITE, 'lawn').receiveShadow = true;
-
-  // Barney Rd
-  const rc0 = U(735, 1350), rc1 = U(1340, 300), rdx = rc1[0] - rc0[0], rdz = rc1[1] - rc0[1], rl = Math.hypot(rdx, rdz), rd = [rdx / rl, rdz / rl], rn0 = [-rd[1], rd[0]];
-  const along = (p, s) => [p[0] + rd[0] * s, p[1] + rd[1] * s];
-  const r0 = along(rc0, -500), r1 = along(rc1, 500);
-  const sideSign = ((100 - rc0[0]) * rn0[0] + (100 - rc0[1]) * rn0[1]) > 0 ? 1 : -1, nS = [rn0[0] * sideSign, rn0[1] * sideSign];
-  const off = (p, d) => [p[0] + nS[0] * d, p[1] + nS[1] * d];
-  seg2(r0, r1, 30, 0.12, 0, M.road, SITE, 'barney_rd');
-  for (let s = 0; s < rl + 1000; s += 20) seg2(along(r0, s), along(r0, s + 10), 0.5, 0.02, 0.12, M.yellow, SITE, 'centre_line');
-  seg2(off(r0, 15.6), off(r1, 15.6), 1.2, 0.5, 0, M.curb, SITE, 'curb');
-  seg2(off(r0, 20), off(r1, 20), 5, 0.3, 0, M.pave, SITE, 'sidewalk');
-  seg2(off(r0, -15.6), off(r1, -15.6), 1.2, 0.5, 0, M.curb, SITE, 'curb');
-  flat([off(r0, -17), off(r1, -17), off(r1, -400), off(r0, -400)], 0.04, M.gravel, SITE, 'neighbouring_yard');
-  { const lp = along(rc0, rl * 0.78); labels.push({ name: 'Barney Rd', dim: '', site: true, x: off(lp, -2)[0], y: 3, z: off(lp, -2)[1] }); }
-  const proj = p => (p[0] - rc0[0]) * rd[0] + (p[1] - rc0[1]) * rd[1];
-
-  // Parking lot (existing)
-  const lotU = [[385, 520], [400, 455], [425, 425], [520, 422], [605, 458], [690, 500], [705, 600], [700, 640], [780, 660], [905, 745], [915, 795], [895, 820], [860, 850], [835, 895], [810, 880], [415, 630], [410, 585], [380, 560]];
-  const lotL = UL(lotU);
-  const AY = 0.25; // all paving sits at one level so the lot, circle and drive read as one surface
-  flat(lotL, AY, M.asphalt, SITE, 'parking_lot');
-  const ccPre = [ecx, stepsEnd + 22 + 38], CRp = 38;
-  // join the circle to the lot: convex hull of the circle and the lot corners next to it
-  { const pts = [];
-    for (let i = 0; i < 72; i++) { const a = i / 72 * Math.PI * 2; pts.push([ccPre[0] + Math.cos(a) * CRp, ccPre[1] + Math.sin(a) * CRp]); }
-    lotL.forEach(p => { if (Math.hypot(p[0] - ccPre[0], p[1] - ccPre[1]) < 75) pts.push(p); });
-    pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    const lo = [], hi = [];
-    pts.forEach(p => { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); });
-    pts.slice().reverse().forEach(p => { while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); });
-    flat(lo.slice(0, -1).concat(hi.slice(0, -1)), AY, M.asphalt, SITE, 'lot_circle_join'); }
-  const islandP = (pts, nm) => { flat(pts, 0.0, M.curb, SITE, nm + '_curb', 0.55); flat(pts, 0.56, M.lawn, SITE, nm); };
-  const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
-  const islands = [], stripes = [];
-  const segX = (a, b, c2, d2) => { const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])); return o(a, b, c2) !== o(a, b, d2) && o(c2, d2, a) !== o(c2, d2, b); };
-  const addStripe = (a, b) => {
-    const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    for (const P of islands) if (inPoly(a, P) || inPoly(b, P) || inPoly(m, P)) return;
-    for (const [p, q] of stripes) if (segX(a, b, p, q)) return;
-    stripes.push([a, b]); seg2(a, b, 0.45, 0.03, AY + 0.01, M.stripe, SITE, 'stall_line');
-  };
-  { // parking grid aligned to the lot's long edge (traced from the aerial): rows, a straight grass island, aisles
-    const O = U(415, 630), E = U(835, 895), LL = Math.hypot(E[0] - O[0], E[1] - O[1]), d = [(E[0] - O[0]) / LL, (E[1] - O[1]) / LL];
-    let n = [-d[1], d[0]]; if ((ccPre[0] - O[0]) * n[0] + (ccPre[1] - O[1]) * n[1] < 0) n = [-n[0], -n[1]];
-    const P = (s, t) => [O[0] + d[0] * s + n[0] * t, O[1] + d[1] * s + n[1] * t];
-    const inLot = p => inPoly(p, lotL);
-    // grass island between the two middle rows, ending short of the drop-off circle
-    let sA = -60; while (sA < 0 && !(inLot(P(sA, 60.5)) && inLot(P(sA, 68.5)))) sA += 1;
-    let sB = sA; while (Math.min(dist(P(sB + 1, 60.5), ccPre), dist(P(sB + 1, 68.5), ccPre)) > CRp + 12 && sB < 140) sB += 1;
-    const isl = [P(sA, 60.5), P(sB, 60.5), P(sB, 68.5), P(sA, 68.5)];
-    islandP(isl, 'centre_island'); islands.push(isl);
-    const row = (t0, t1, sMin, sMax) => { for (let s = -54; s <= 240; s += 9) { if (s < sMin || s > sMax) continue; addStripe(P(s, t0), P(s, t1)); } };
-    const ok = (a, b) => inLot(a) && inLot(b) && Math.min(dist(a, ccPre), dist(b, ccPre)) > CRp + 8;
-    const row2 = (t0, t1, sMin, sMax) => { for (let s = -54; s <= 240; s += 9) { if (s < sMin || s > sMax) continue; const a = P(s, t0), b = P(s, t1); if (ok(a, b)) addStripe(a, b); } };
-    row2(0.8, 18.5, -60, 240);          // along the long edge
-    row2(42.5, 60.2, -60, sB);         // facing the island, south side
-    row2(68.8, 86.5, -60, sB);         // facing the island, north side
-    row2(57.5, 75.2, 126, 240);         // east arm, against its edge
-  }
-  labels.push({ name: 'Parking', dim: '', site: true, x: U(560, 600)[0], y: 3, z: U(560, 600)[1] });
-  flat(UL([[510, 810], [590, 830], [580, 875], [505, 860]]), 0.05, M.sand, SITE, 'play_area');
-
-  // ── DROP-OFF CIRCLE + ENTRY PLAZA, centred on the main entrance ──
-  const CR = 38, ISL = 13, plazaDepth = 22, cc = [ecx, stepsEnd + plazaDepth + CR];
-  { const cg = new THREE.CircleGeometry(CR, 96); cg.rotateX(-Math.PI / 2); mesh(cg, M.asphalt, SITE, cc[0], AY, cc[1], 'drop_off_circle').castShadow = false; }
-  // island: curb ring, soil, clipped hedge ring, flower rings, fountain at the centre
-  mesh(new THREE.CylinderGeometry(ISL + 0.8, ISL + 0.8, 0.7, 64), M.curb, LAND, cc[0], 0.35, cc[1], 'island_curb');
-  mesh(new THREE.CylinderGeometry(ISL, ISL, 0.12, 64), M.soil, LAND, cc[0], 0.76, cc[1], 'island_bed');
-  { const hg = []; for (let i = 0; i < 44; i++) { const a = i / 44 * Math.PI * 2, g = new THREE.IcosahedronGeometry(1.05, 0); g.scale(1, 0.75, 1); g.translate(cc[0] + Math.cos(a) * (ISL - 1.1), 1.4, cc[1] + Math.sin(a) * (ISL - 1.1)); hg.push(g); }
-    mesh(mergeGeos(hg), M.hedge, LAND, 0, 0, 0, 'island_hedge_ring'); }
-  [[ISL - 3.0, ISL - 2.1, [0]], [ISL - 4.6, ISL - 3.2, [3]], [ISL - 6.4, ISL - 4.8, [1]], [ISL - 8.0, ISL - 6.6, [2]]].forEach(([ri, ro, pal], k) =>
-    flowers((x, z) => { const r = Math.hypot(x - cc[0], z - cc[1]); return r > ri && r < ro; }, [cc[0] - ro, cc[1] - ro, cc[0] + ro, cc[1] + ro], 0.8, 3.2, LAND, pal, 'island_ring' + k));
-  mesh(new THREE.CylinderGeometry(4.2, 4.5, 1.2, 32), M.stone, LAND, cc[0], 1.4, cc[1], 'fountain_basin');
-  mesh(new THREE.CylinderGeometry(3.8, 3.8, 0.2, 32), M.water, LAND, cc[0], 2.0, cc[1], 'fountain_water');
-  mesh(new THREE.CylinderGeometry(0.5, 0.8, 3.2, 16), M.stone, LAND, cc[0], 3.4, cc[1], 'fountain_column');
-  mesh(new THREE.CylinderGeometry(1.8, 1.2, 0.5, 24), M.stone, LAND, cc[0], 5.1, cc[1], 'fountain_bowl');
-  mesh(new THREE.LatheGeometry([[0, 0], [0.5, 0], [0.55, 0.4], [0.35, 0.8], [0, 1.2]].map(q => new THREE.Vector2(q[0], q[1])), 16), M.gold, LAND, cc[0], 5.35, cc[1], 'fountain_finial');
-
-  // entry plaza between the steps and the circle; its front edge follows the curb
-  const pw = 22, PR = CR + 1.2, plazaPts = [[ecx - pw, stepsEnd - 0.2], [ecx + pw, stepsEnd - 0.2]];
-  const arcA = Math.asin(Math.min(1, pw / PR));
-  for (let i = 0; i <= 24; i++) { const a = -Math.PI / 2 + arcA - (2 * arcA * i / 24); plazaPts.push([cc[0] + Math.cos(a) * PR, cc[1] + Math.sin(a) * PR]); }
-  flat(plazaPts, 0, M.pave, LAND, 'entry_plaza', 0.4);
-  for (let z = stepsEnd + 1.5; z < cc[1] - PR - 1; z += 3) box(15, 0.03, 0.35, M.paveDark, LAND, ecx, 0.42, z, 'plaza_band');
-  [-1, 1].forEach(sg => {
-    const xa = ecx + sg * 9.5, xb = ecx + sg * 19.5, zA = stepsEnd + 2.5, zB = stepsEnd + plazaDepth - 5;
-    const bx = Math.min(xa, xb), bX = Math.max(xa, xb);
-    flat([[bx, zA], [bX, zA], [bX, zB], [bx, zB]], 0.0, M.curb, LAND, 'plaza_bed_curb', 0.6);
-    flat([[bx + 0.6, zA + 0.6], [bX - 0.6, zA + 0.6], [bX - 0.6, zB - 0.6], [bx + 0.6, zB - 0.6]], 0.61, M.soil, LAND, 'plaza_bed');
-    flowers((x, z) => x > bx + 0.9 && x < bX - 0.9 && z > zA + 0.9 && z < zB - 0.9, [bx, zA, bX, zB], 0.6, 2.4, LAND, [0, 1, 2, 3, 5], 'plaza_bed');
-    lampPost(ecx + sg * 8.3, zA + 0.5, LAND); lampPost(ecx + sg * 8.3, zB - 0.5, LAND);
-  });
-  labels.push({ name: 'Entry plaza', dim: '', site: true, x: ecx, y: 3, z: stepsEnd + plazaDepth / 2 + 2 });
-  // walkway from the plaza along the dine area to the Madressah entrances
-  const madE = PX(219) + 10.5;
-  const wz = stepsEnd + 7;
-  // planting along the building front
-  hedgeLine([PX(330) - 2, PZ(450)], [madE + 6, PZ(450)], LAND, 'hedge_dine');
-  hedgeLine([PX(503.5) + 2, PZ(467)], [PX(550) + 2, PZ(467)], LAND, 'hedge_wing');
-  hedgeLine([PX(331), PZ(450)], [PX(373), PZ(450)], LAND, 'hedge_men');
-  hedgeLine([PX(458), PZ(450)], [PX(500), PZ(450)], LAND, 'hedge_women');
-  flowers((x, z) => true, [PX(331) + 1, PZ(452), PX(373) - 1, PZ(455)], 0.1, 2.2, LAND, [0, 1, 3], 'front_bed_w');
-  flowers((x, z) => true, [PX(458) + 1, PZ(452), PX(500) - 1, PZ(455)], 0.1, 2.2, LAND, [0, 1, 3], 'front_bed_e');
-
-  // ── FENCE along Barney Rd on both sides of the gate ──
-  const FO = 26;
-  const dA = U(865, 845), dB = U(950, 890);
-  const gc = (() => {
-    const p0 = off(rc0, FO), dd = [dB[0] - dA[0], dB[1] - dA[1]];
-    const den = dd[0] * rd[1] - dd[1] * rd[0], t = ((p0[0] - dA[0]) * rd[1] - (p0[1] - dA[1]) * rd[0]) / den;
-    return [dA[0] + dd[0] * t, dA[1] + dd[1] * t];
-  })();
-  const span = 34, sG = proj(gc);
-  { // entrance drive: a straight 30 ft lane from the end of the lot, through the gate, to the road edge
-    const u0 = [dB[0] - dA[0], dB[1] - dA[1]], ul = Math.hypot(...u0), u = [u0[0] / ul, u0[1] / ul], w = [-u[1] * 15, u[0] * 15];
-    const dRoad = p => (p[0] - rc0[0]) * nS[0] + (p[1] - rc0[1]) * nS[1];
-    const k = (dRoad(gc) - 14) / -(u[0] * nS[0] + u[1] * nS[1]);
-    const a = [gc[0] - u[0] * 40, gc[1] - u[1] * 40], b = [gc[0] + u[0] * k, gc[1] + u[1] * k];
-    flat([[a[0] + w[0], a[1] + w[1]], [b[0] + w[0], b[1] + w[1]], [b[0] - w[0], b[1] - w[1]], [a[0] - w[0], a[1] - w[1]]], AY, M.asphalt, SITE, 'entrance_drive');
-  }
-  const fenceTo = (s0, s1, nm) => {
-    const a = off(along(rc0, s0), FO), b = off(along(rc0, s1), FO), L = Math.abs(s1 - s0), dir = Math.sign(s1 - s0);
-    const pick = [], tips = [], nPier = Math.max(1, Math.round(L / 24));
-    for (let i = 0; i <= nPier; i++) {
-      const p = off(along(rc0, s0 + dir * L * i / nPier), FO);
-      box(1.6, 6.2, 1.6, M.stone, SITE, p[0], 3.1, p[1], nm + '_pier'); box(2.1, 0.4, 2.1, M.trim, SITE, p[0], 6.4, p[1], nm + '_pier_cap');
-    }
-    seg2(a, b, 0.25, 0.25, 0.7, M.iron, SITE, nm + '_rail'); seg2(a, b, 0.25, 0.25, 4.9, M.iron, SITE, nm + '_rail');
-    for (let s = 0.6; s < L - 0.3; s += 0.55) {
-      const p = off(along(rc0, s0 + dir * s), FO), g = new THREE.BoxGeometry(0.09, 4.8, 0.09); g.translate(p[0], 3.0, p[1]); pick.push(g);
-      const tip = new THREE.ConeGeometry(0.12, 0.45, 4); tip.translate(p[0], 5.6, p[1]); tips.push(tip);
-    }
-    mesh(mergeGeos(pick), M.iron, SITE, 0, 0, 0, nm + '_pickets').castShadow = false;
-    mesh(mergeGeos(tips), M.gold, SITE, 0, 0, 0, nm + '_spears').castShadow = false;
-  };
-  const sNorth = proj(U(1300, 240)), sSouth = proj(U(860, 1060));
-  fenceTo(sG + span / 2 + 1.6, Math.max(sNorth, sG + 60), 'fence_north');
-  fenceTo(sG - span / 2 - 1.6, Math.min(sSouth, sG - 250), 'fence_south');
-  { const lp = off(along(rc0, sG + 110), FO); labels.push({ name: 'Fence', dim: 'Along Barney Rd', site: true, x: lp[0], y: 9, z: lp[1] }); }
-
-  // ── MAIN GATE, in line with the fence ──
+  // ── ACCESSIBLE RAMP: 1:12 slope, 5 ft wide, along the building front ──
   {
-    const pA = off(along(rc0, sG - span / 2 - 1.6), FO), pB = off(along(rc0, sG + span / 2 + 1.6), FO);
-    const gG = new THREE.Group(); gG.name = 'main_gate'; SITE.add(gG);
-    [pA, pB].forEach(p => {
-      box(3.2, 10, 3.2, M.stone, gG, p[0], 5, p[1], 'gate_pillar');
-      box(4, 0.6, 4, M.trim, gG, p[0], 10.3, p[1], 'gate_pillar_cap');
-      mesh(new THREE.LatheGeometry([[0, 0], [1.35, 0], [1.4, 0.5], [1.25, 1.1], [0.85, 1.75], [0.35, 2.15], [0, 2.3]].map(q => new THREE.Vector2(q[0], q[1])), 24), M.dome, gG, p[0], 10.6, p[1], 'gate_pillar_dome');
-      mesh(new THREE.LatheGeometry([[0, 0], [0.2, 0], [0.25, 0.3], [0.1, 0.5], [0.05, 1.2], [0, 1.4]].map(q => new THREE.Vector2(q[0], q[1])), 12), M.gold, gG, p[0], 12.85, p[1], 'gate_finial');
+    const rise = 2;
+    const length = rise * 12;
+    const zNear = planZ(450) + 2.4, zFar = zNear + 5;
+    const xTop = porch.x0, xBottom = xTop - length;
+
+    // sloped slab (side profile pushed out to the ramp's width)
+    const side = new THREE.Shape();
+    side.moveTo(0, 0);
+    side.lineTo(length, 0);
+    side.lineTo(length, rise);
+    side.lineTo(0, 0.02);
+    mesh(new THREE.ExtrudeGeometry(side, { depth: zFar - zNear, bevelEnabled: false }), mat.pave, groups.site, xBottom, 0, zNear, 'ramp');
+    flat([[xBottom - 5, zNear], [xBottom, zNear], [xBottom, zFar], [xBottom - 5, zFar]], 0, mat.pave, groups.site, 'ramp_landing', 0.12);
+
+    // handrails on both sides
+    const slope = Math.atan2(rise, length);
+    const slopeLength = Math.hypot(length, rise);
+    [zNear + 0.15, zFar - 0.15].forEach((z) => {
+      for (let i = 0; i <= 6; i++) {
+        mesh(new THREE.CylinderGeometry(0.07, 0.07, 3, 8), mat.doorFrame, groups.site, xBottom + (length * i) / 6, (rise * i) / 6 + 1.5, z, 'ramp_post');
+      }
+      const handrail = mesh(new THREE.CylinderGeometry(0.09, 0.09, slopeLength + 1, 8), mat.doorFrame, groups.site, xBottom + length / 2, rise / 2 + 3, z, 'ramp_handrail');
+      handrail.rotation.z = Math.PI / 2 - slope;
+      const midrail = mesh(new THREE.CylinderGeometry(0.05, 0.05, slopeLength, 8), mat.doorFrame, groups.site, xBottom + length / 2, rise / 2 + 1.6, z, 'ramp_midrail');
+      midrail.rotation.z = Math.PI / 2 - slope;
     });
-    const inward = [-nS[0], -nS[1]];
-    [[pA, 1], [pB, -1]].forEach(([p, s]) => {
-      const hinge = along(p, 1.6 * s), leaf = new THREE.Group(); leaf.name = 'gate_leaf';
-      leaf.position.set(hinge[0], 0, hinge[1]); gG.add(leaf);
-      const W = span / 2 - 0.2;
-      [0.6, 6.6].forEach(y => box(W, 0.3, 0.3, M.iron, leaf, W / 2, y, 0, 'gate_rail'));
-      for (let i = 0; i <= 16; i++) { const hgt = 6.2 + Math.sin(Math.PI * i / 16) * 1.4; box(0.12, hgt, 0.12, M.iron, leaf, (i / 16) * W, 0.6 + hgt / 2, 0, 'gate_bar'); box(0.14, 0.45, 0.14, M.gold, leaf, (i / 16) * W, 0.6 + hgt + 0.2, 0, 'gate_spear'); }
-      const base = Math.atan2(rd[1] * s, rd[0] * s), open = Math.atan2(inward[1], inward[0]);
-      let df = open - base; while (df > Math.PI) df -= 2 * Math.PI; while (df < -Math.PI) df += 2 * Math.PI;
-      leaf.rotation.y = -(base + df * 0.72);
-    });
-    labels.push({ name: 'Main gate', dim: 'Entrance from Barney Rd', site: true, x: gc[0], y: 16, z: gc[1] });
+
+    // path from the bottom landing to the entry plaza
+    flat([[xBottom - 5, zFar], [xBottom, zFar], [xBottom, stepsEnd + 4], [xBottom - 5, stepsEnd + 4]], 0, mat.pave, groups.site, 'ramp_walk', 0.12);
+    flat([[xBottom - 5, stepsEnd], [entranceX - 21, stepsEnd], [entranceX - 21, stepsEnd + 4], [xBottom - 5, stepsEnd + 4]], 0, mat.pave, groups.site, 'ramp_walk', 0.12);
+    labels.push({ name: 'Ramp', dim: '1:12 slope', site: true, x: xBottom + length / 2, y: 6, z: (zNear + zFar) / 2 });
   }
 
-  // ── WOODS ──
+  // ── STAIRS & LIFT: up flight on the east, down flight on the west, landing at the north ──
+  for (let i = 0; i < 15; i++) {
+    box(planX(549) - planX(540), 0.5, 1, mat.pave, groups.furniture, (planX(540) + planX(549)) / 2, 2.5 + (i + 1) * 0.5 - 0.25, planZ(450) - i, 'stair');
+    box(planX(524) - planX(504), 0.5, 1, mat.pave, groups.furniture, (planX(504) + planX(524)) / 2, 2.5 + 7.5 + (i + 1) * 0.5 - 0.25, planZ(450) - 14 + i, 'stair');
+  }
+  box(planX(549) - planX(504), 0.5, 3.5, mat.pave, groups.furniture, (planX(504) + planX(549)) / 2, 2.5 + 7.5 - 0.25, planZ(450) - 16.5, 'landing');
+  const liftHeight = opt.cut ? opt.cut : TWO_STOREY_H + 3;
+  box(planX(538.75) - planX(526), liftHeight, planZ(442.5) - planZ(410), mat.dark, groups.walls, (planX(526) + planX(538.75)) / 2, 2.5 + liftHeight / 2, (planZ(410) + planZ(442.5)) / 2, 'lift_shaft');
+
+  // ── FURNITURE ──
+  if (opt.furniture) {
+    const F = groups.furniture;
+
+    // Masjid: prayer-row lines and the minbar steps
+    for (let py = 92; py <= 245; py += 12.8) {
+      box(planX(500) - planX(333), 0.04, 0.25, mat.saff, F, (planX(333) + planX(500)) / 2, 3.1, planZ(py), 'saff_line');
+    }
+    for (let i = 0; i < 4; i++) box(3, 1 + i, 1.2, mat.wood, F, planX(437), 3.5 + i * 0.5, planZ(84) + 1 + i * 1.2, 'minbar');
+
+    // Dine area: 84 thaals (7 rows × 12) on low stands
+    const thaalGeo = new THREE.CylinderGeometry(2.4, 2.4, 0.25, 24);
+    const standGeo = new THREE.CylinderGeometry(0.9, 1.1, 0.9, 12);
+    for (let row = 0; row < 7; row++) {
+      for (let col = 0; col < 12; col++) {
+        const x = planX(113 + col * 18.5), z = planZ(236 + row * 27);
+        mesh(standGeo, mat.wood, F, x, 3.5, z, 'thaal_stand');
+        mesh(thaalGeo, mat.brass, F, x, 4.05, z, 'thaal');
+      }
+    }
+
+    // Mawaid service area and kitchen
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 2; col++) {
+        mesh(new THREE.CylinderGeometry(1.6, 1.6, 5.5, 18), mat.steel, F, planX(111 + col * 6), 1 + 2.75, planZ(461 + row * 12), 'thaal_rack');
+      }
+    }
+    [[110, 135], [137, 162], [164, 190]].forEach(([a, b]) =>
+      box(planX(b) - planX(a), 3, 1.8, mat.steel, F, (planX(a) + planX(b)) / 2, 2.5, planZ(450), 'service_platform'),
+    );
+    box(planX(140) - planX(117), 3, 0.8, material(0x5aa86a), F, (planX(117) + planX(140)) / 2, 2.5, planZ(480), 'service_window_counter');
+    box(planX(180) - planX(174), 3, planZ(564) - planZ(487), mat.steel, F, (planX(174) + planX(180)) / 2, 2.5, (planZ(487) + planZ(564)) / 2, 'prep_counter_veg_nonveg');
+    box(planX(211) - planX(206), 3, planZ(560) - planZ(486), mat.steel, F, (planX(206) + planX(211)) / 2, 2.5, (planZ(486) + planZ(560)) / 2, 'kitchen_counter');
+    box(planX(203) - planX(196), 3, planZ(532) - planZ(505), mat.steel, F, (planX(196) + planX(203)) / 2, 2.5, (planZ(505) + planZ(532)) / 2, 'cooking_range');
+
+    // Madressah wash room: stall walls and toilets
+    [595, 617, 638, 660].forEach((py) => box(planX(201) - planX(180), 7, 0.3, mat.dark, F, (planX(180) + planX(201)) / 2, 4.5, planZ(py), 'stall'));
+    [604, 626, 646, 666].forEach((py) => toilet(planX(188), 1, planZ(py)));
+
+    // Classroom desks
+    const desk = (x, z) => box(3.4, 2.5, 1.8, mat.wood, F, x, 2.25, z, 'desk');
+    classRow1.forEach(([a, b]) => {
+      for (let k = 0; k < 2; k++) for (let j = 0; j < 2; j++) desk(planX(a + (b - a) * (0.3 + 0.4 * k)), planZ(696 + j * 13));
+    });
+    for (let i = 0; i < 6; i++) {
+      for (let k = 0; k < 2; k++) {
+        for (let j = 0; j < 3; j++) desk(planX(classRow2[i] + (classRow2[i + 1] - classRow2[i]) * (0.3 + 0.4 * k)), planZ(741 + j * 9));
+      }
+    }
+
+    // Offices and waiting area
+    box(8, 2.6, 3, mat.wood, F, planX(46), 2.3, planZ(517), 'aamil_desk');
+    box(9, 2.2, 3, material(0x6b5a4a), F, planX(46), 2.1, planZ(555), 'aamil_sofa');
+    box(9, 2.5, 4, mat.wood, F, planX(47), 2.25, planZ(608), 'meeting_table');
+    [[90, 99], [102, 111], [114, 123]].forEach(([a, b]) =>
+      box(planX(b) - planX(a), 1.6, 1.6, mat.brass, F, (planX(a) + planX(b)) / 2, 1.8, planZ(570), 'waiting_bench'),
+    );
+
+    // Garden courtyard: fountain and small trees
+    mesh(new THREE.CylinderGeometry(2.6, 2.8, 1.2, 24), mat.pave, F, planX(55), 1.6, planZ(480), 'garden_fountain');
+    mesh(new THREE.CylinderGeometry(2.2, 2.2, 0.2, 24), mat.water, F, planX(55), 2.15, planZ(480), 'garden_water');
+    [[38, 462], [45, 490], [62, 458], [66, 492], [30, 478]].forEach(([px, py]) => {
+      mesh(new THREE.CylinderGeometry(0.35, 0.45, 5, 8), mat.trunk, F, planX(px), 3.5, planZ(py), 'garden_tree');
+      mesh(new THREE.SphereGeometry(2.4, 12, 10), mat.leaf, F, planX(px), 7.2, planZ(py), 'garden_tree');
+    });
+  }
+
+  // ───────────────────────────────── 8. SITE ─────────────────────────────────
+
+  /*
+    Converting traced aerial-photo positions into model feet.
+    (u, v) are pixel positions on the traced aerial image (3× enlarged, 0.4222 m per original pixel).
+    The image is rotated and moved so the existing building lines up with the Madressah.
+  */
+  const FT_PER_PIXEL = 0.3048 / 0.4222;
+  const IMG_CENTRE_X = 394.2, IMG_CENTRE_Y = 112.1; // the existing building's centre in the image
+  const anchor = planPt(119.25, 624.5); // the Madressah's centre on the drawing
+  const IMG_X_AXIS = [0.35837, 0.93358], IMG_Y_AXIS = [-0.93358, 0.35837]; // image rotation
+  const aerialToPlan = (u, v) => {
+    const ox = (u / 3 + 175 - IMG_CENTRE_X) / FT_PER_PIXEL;
+    const oy = (v / 3 - IMG_CENTRE_Y) / FT_PER_PIXEL;
+    return [anchor[0] + ox * IMG_X_AXIS[0] + oy * IMG_X_AXIS[1], anchor[1] + ox * IMG_Y_AXIS[0] + oy * IMG_Y_AXIS[1]];
+  };
+  const aerialList = (points) => points.map((p) => aerialToPlan(p[0], p[1]));
+  const SITE = groups.site, LAND = groups.landscape;
+
+  // ── Ground and the cleared lawn around the buildings ──
+  box(2600, 0.4, 2600, mat.grass, SITE, 100, -0.2, 120, 'ground').castShadow = false;
+  const clearing = [
+    [380, 430], [390, 330], [470, 280], [520, 250], [600, 200], [700, 150], [800, 100], [900, 75], [1000, 70], [1100, 100],
+    [1200, 170], [1300, 240], [1345, 300], [1040, 740], [945, 880], [905, 960], [860, 1060], [760, 1060], [640, 985],
+    [520, 925], [400, 860], [300, 760], [230, 700], [215, 600], [290, 560], [370, 520],
+  ];
+  flat(aerialList(clearing), 0.02, mat.lawn, SITE, 'lawn').receiveShadow = true;
+
+  // ── Barney Rd ──
+  const roadStart = aerialToPlan(735, 1350), roadEnd = aerialToPlan(1340, 300);
+  const roadLength = Math.hypot(roadEnd[0] - roadStart[0], roadEnd[1] - roadStart[1]);
+  const roadDir = [(roadEnd[0] - roadStart[0]) / roadLength, (roadEnd[1] - roadStart[1]) / roadLength];
+  const roadNormal = [-roadDir[1], roadDir[0]];
+  const along = (p, distance) => [p[0] + roadDir[0] * distance, p[1] + roadDir[1] * distance]; // move along the road
+  const roadFar0 = along(roadStart, -500), roadFar1 = along(roadEnd, 500);
+  const siteSide = (100 - roadStart[0]) * roadNormal[0] + (100 - roadStart[1]) * roadNormal[1] > 0 ? 1 : -1;
+  const towardSite = [roadNormal[0] * siteSide, roadNormal[1] * siteSide];
+  const offset = (p, distance) => [p[0] + towardSite[0] * distance, p[1] + towardSite[1] * distance]; // move toward the site
+  segment(roadFar0, roadFar1, 30, 0.12, 0, mat.road, SITE, 'barney_rd');
+  for (let s = 0; s < roadLength + 1000; s += 20) {
+    segment(along(roadFar0, s), along(roadFar0, s + 10), 0.5, 0.02, 0.12, mat.yellow, SITE, 'centre_line');
+  }
+  segment(offset(roadFar0, 15.6), offset(roadFar1, 15.6), 1.2, 0.5, 0, mat.curb, SITE, 'curb');
+  segment(offset(roadFar0, 20), offset(roadFar1, 20), 5, 0.3, 0, mat.pave, SITE, 'sidewalk');
+  segment(offset(roadFar0, -15.6), offset(roadFar1, -15.6), 1.2, 0.5, 0, mat.curb, SITE, 'curb');
+  flat([offset(roadFar0, -17), offset(roadFar1, -17), offset(roadFar1, -400), offset(roadFar0, -400)], 0.04, mat.gravel, SITE, 'neighbouring_yard');
+  {
+    const p = offset(along(roadStart, roadLength * 0.78), -2);
+    labels.push({ name: 'Barney Rd', dim: '', site: true, x: p[0], y: 3, z: p[1] });
+  }
+  const distanceAlongRoad = (p) => (p[0] - roadStart[0]) * roadDir[0] + (p[1] - roadStart[1]) * roadDir[1];
+
+  // ── PARKING LOT (outline traced from the aerial photo) ──
+  const lotOutline = aerialList([
+    [385, 520], [400, 455], [425, 425], [520, 422], [605, 458], [690, 500], [705, 600], [700, 640], [780, 660],
+    [905, 745], [915, 795], [895, 820], [860, 850], [835, 895], [810, 880], [415, 630], [410, 585], [380, 560],
+  ]);
+  const PAVING_Y = 0.25; // all paving sits at one level so the lot, circle and drive look like one surface
+  flat(lotOutline, PAVING_Y, mat.asphalt, SITE, 'parking_lot');
+
+  const CIRCLE_R = 38; // drop-off circle radius (ft)
+  const PLAZA_DEPTH = 22; // entry plaza depth between the steps and the circle
+  const circleCentre = [entranceX, stepsEnd + PLAZA_DEPTH + CIRCLE_R];
+
+  // Fill the gap between the circle and the lot (the outline around both: a convex hull).
+  {
+    const pts = [];
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      pts.push([circleCentre[0] + Math.cos(a) * CIRCLE_R, circleCentre[1] + Math.sin(a) * CIRCLE_R]);
+    }
+    lotOutline.forEach((p) => {
+      if (Math.hypot(p[0] - circleCentre[0], p[1] - circleCentre[1]) < 75) pts.push(p);
+    });
+    pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const turn = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower = [], upper = [];
+    pts.forEach((p) => {
+      while (lower.length > 1 && turn(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    });
+    pts.slice().reverse().forEach((p) => {
+      while (upper.length > 1 && turn(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    });
+    flat(lower.slice(0, -1).concat(upper.slice(0, -1)), PAVING_Y, mat.asphalt, SITE, 'lot_circle_join');
+  }
+
+  // Parking space lines. A line is skipped if it would land on a grass island or cross another line.
+  const distance = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  const islands = [];
+  const drawnLines = [];
+  const linesCross = (a, b, c, d) => {
+    const side = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+    return side(a, b, c) !== side(a, b, d) && side(c, d, a) !== side(c, d, b);
+  };
+  const parkingLine = (a, b) => {
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    for (const isl of islands) if (insidePolygon(a, isl) || insidePolygon(b, isl) || insidePolygon(mid, isl)) return;
+    for (const [p, q] of drawnLines) if (linesCross(a, b, p, q)) return;
+    drawnLines.push([a, b]);
+    segment(a, b, 0.45, 0.03, PAVING_Y + 0.01, mat.stripe, SITE, 'stall_line');
+  };
+
+  {
+    // Lay the rows out parallel to the lot's long south edge.
+    const O = aerialToPlan(415, 630), E = aerialToPlan(835, 895);
+    const edgeLength = Math.hypot(E[0] - O[0], E[1] - O[1]);
+    const dir = [(E[0] - O[0]) / edgeLength, (E[1] - O[1]) / edgeLength];
+    let across = [-dir[1], dir[0]];
+    if ((circleCentre[0] - O[0]) * across[0] + (circleCentre[1] - O[1]) * across[1] < 0) across = [-across[0], -across[1]];
+    const lotPoint = (s, t) => [O[0] + dir[0] * s + across[0] * t, O[1] + dir[1] * s + across[1] * t]; // s along the edge, t across
+    const inLot = (p) => insidePolygon(p, lotOutline);
+
+    // Grass island between the two middle rows, ending short of the drop-off circle.
+    let islandStart = -60;
+    while (islandStart < 0 && !(inLot(lotPoint(islandStart, 60.5)) && inLot(lotPoint(islandStart, 68.5)))) islandStart += 1;
+    let islandEnd = islandStart;
+    while (Math.min(distance(lotPoint(islandEnd + 1, 60.5), circleCentre), distance(lotPoint(islandEnd + 1, 68.5), circleCentre)) > CIRCLE_R + 12 && islandEnd < 140) islandEnd += 1;
+    const island = [lotPoint(islandStart, 60.5), lotPoint(islandEnd, 60.5), lotPoint(islandEnd, 68.5), lotPoint(islandStart, 68.5)];
+    flat(island, 0.0, mat.curb, SITE, 'centre_island_curb', 0.55);
+    flat(island, 0.56, mat.lawn, SITE, 'centre_island');
+    islands.push(island);
+
+    // One row of 9 ft spaces between t0 and t1 (across), from sMin to sMax (along).
+    const fitsInLot = (a, b) => inLot(a) && inLot(b) && Math.min(distance(a, circleCentre), distance(b, circleCentre)) > CIRCLE_R + 8;
+    const parkingRow = (t0, t1, sMin, sMax) => {
+      for (let s = -54; s <= 240; s += 9) {
+        if (s < sMin || s > sMax) continue;
+        const a = lotPoint(s, t0), b = lotPoint(s, t1);
+        if (fitsInLot(a, b)) parkingLine(a, b);
+      }
+    };
+    parkingRow(0.8, 18.5, -60, 240); // along the long edge
+    parkingRow(42.5, 60.2, -60, islandEnd); // facing the island, south side
+    parkingRow(68.8, 86.5, -60, islandEnd); // facing the island, north side
+    parkingRow(57.5, 75.2, 126, 240); // east arm, against its edge
+  }
+  {
+    const p = aerialToPlan(560, 600);
+    labels.push({ name: 'Parking', dim: '', site: true, x: p[0], y: 3, z: p[1] });
+  }
+  flat(aerialList([[510, 810], [590, 830], [580, 875], [505, 860]]), 0.05, mat.sand, SITE, 'play_area');
+
+  // ── DROP-OFF CIRCLE with flower island and fountain, centred on the entrance ──
+  const ISLAND_R = 13;
+  {
+    const disc = new THREE.CircleGeometry(CIRCLE_R, 96);
+    disc.rotateX(-Math.PI / 2);
+    mesh(disc, mat.asphalt, SITE, circleCentre[0], PAVING_Y, circleCentre[1], 'drop_off_circle').castShadow = false;
+  }
+  const [cx, cz] = circleCentre;
+  mesh(new THREE.CylinderGeometry(ISLAND_R + 0.8, ISLAND_R + 0.8, 0.7, 64), mat.curb, LAND, cx, 0.35, cz, 'island_curb');
+  mesh(new THREE.CylinderGeometry(ISLAND_R, ISLAND_R, 0.12, 64), mat.soil, LAND, cx, 0.76, cz, 'island_bed');
+  {
+    // ring of clipped hedge round the edge
+    const bushes = [];
+    for (let i = 0; i < 44; i++) {
+      const a = (i / 44) * Math.PI * 2;
+      const g = new THREE.IcosahedronGeometry(1.05, 0);
+      g.scale(1, 0.75, 1);
+      g.translate(cx + Math.cos(a) * (ISLAND_R - 1.1), 1.4, cz + Math.sin(a) * (ISLAND_R - 1.1));
+      bushes.push(g);
+    }
+    mesh(mergeGeometries(bushes), mat.hedge, LAND, 0, 0, 0, 'island_hedge_ring');
+  }
+  // four rings of flowers: red, white, pink, yellow (outside → in)
+  [
+    [ISLAND_R - 3.0, ISLAND_R - 2.1, [0]],
+    [ISLAND_R - 4.6, ISLAND_R - 3.2, [3]],
+    [ISLAND_R - 6.4, ISLAND_R - 4.8, [1]],
+    [ISLAND_R - 8.0, ISLAND_R - 6.6, [2]],
+  ].forEach(([inner, outer, colours], k) =>
+    flowers(
+      (x, z) => {
+        const r = Math.hypot(x - cx, z - cz);
+        return r > inner && r < outer;
+      },
+      [cx - outer, cz - outer, cx + outer, cz + outer], 0.8, 3.2, LAND, colours, 'island_ring' + k,
+    ),
+  );
+  mesh(new THREE.CylinderGeometry(4.2, 4.5, 1.2, 32), mat.stone, LAND, cx, 1.4, cz, 'fountain_basin');
+  mesh(new THREE.CylinderGeometry(3.8, 3.8, 0.2, 32), mat.water, LAND, cx, 2.0, cz, 'fountain_water');
+  mesh(new THREE.CylinderGeometry(0.5, 0.8, 3.2, 16), mat.stone, LAND, cx, 3.4, cz, 'fountain_column');
+  mesh(new THREE.CylinderGeometry(1.8, 1.2, 0.5, 24), mat.stone, LAND, cx, 5.1, cz, 'fountain_bowl');
+  mesh(new THREE.LatheGeometry(profile([[0, 0], [0.5, 0], [0.55, 0.4], [0.35, 0.8], [0, 1.2]]), 16), mat.gold, LAND, cx, 5.35, cz, 'fountain_finial');
+
+  // ── ENTRY PLAZA between the steps and the circle (front edge follows the curb) ──
+  {
+    const halfWidth = 22;
+    const curbR = CIRCLE_R + 1.2;
+    const outline = [[entranceX - halfWidth, stepsEnd - 0.2], [entranceX + halfWidth, stepsEnd - 0.2]];
+    const arc = Math.asin(Math.min(1, halfWidth / curbR));
+    for (let i = 0; i <= 24; i++) {
+      const a = -Math.PI / 2 + arc - (2 * arc * i) / 24;
+      outline.push([cx + Math.cos(a) * curbR, cz + Math.sin(a) * curbR]);
+    }
+    flat(outline, 0, mat.pave, LAND, 'entry_plaza', 0.4);
+    for (let z = stepsEnd + 1.5; z < cz - curbR - 1; z += 3) box(15, 0.03, 0.35, mat.paveDark, LAND, entranceX, 0.42, z, 'plaza_band');
+  }
+  // a raised flower bed and two lamp posts on each side of the walk
+  [-1, 1].forEach((side) => {
+    const xa = entranceX + side * 9.5, xb = entranceX + side * 19.5;
+    const zA = stepsEnd + 2.5, zB = stepsEnd + PLAZA_DEPTH - 5;
+    const left = Math.min(xa, xb), right = Math.max(xa, xb);
+    flat([[left, zA], [right, zA], [right, zB], [left, zB]], 0.0, mat.curb, LAND, 'plaza_bed_curb', 0.6);
+    flat([[left + 0.6, zA + 0.6], [right - 0.6, zA + 0.6], [right - 0.6, zB - 0.6], [left + 0.6, zB - 0.6]], 0.61, mat.soil, LAND, 'plaza_bed');
+    flowers((x, z) => x > left + 0.9 && x < right - 0.9 && z > zA + 0.9 && z < zB - 0.9, [left, zA, right, zB], 0.6, 2.4, LAND, [0, 1, 2, 3, 5], 'plaza_bed');
+    lampPost(entranceX + side * 8.3, zA + 0.5, LAND);
+    lampPost(entranceX + side * 8.3, zB - 0.5, LAND);
+  });
+  labels.push({ name: 'Entry plaza', dim: '', site: true, x: entranceX, y: 3, z: stepsEnd + PLAZA_DEPTH / 2 + 2 });
+
+  // ── Hedges and flowers along the building front ──
+  const madressahEdgeX = planX(219) + 10.5;
+  hedgeLine([planX(330) - 2, planZ(450)], [madressahEdgeX + 6, planZ(450)], LAND, 'hedge_dine');
+  hedgeLine([planX(503.5) + 2, planZ(467)], [planX(550) + 2, planZ(467)], LAND, 'hedge_wing');
+  hedgeLine([planX(331), planZ(450)], [planX(373), planZ(450)], LAND, 'hedge_men');
+  hedgeLine([planX(458), planZ(450)], [planX(500), planZ(450)], LAND, 'hedge_women');
+  flowers(() => true, [planX(331) + 1, planZ(452), planX(373) - 1, planZ(455)], 0.1, 2.2, LAND, [0, 1, 3], 'front_bed_w');
+  flowers(() => true, [planX(458) + 1, planZ(452), planX(500) - 1, planZ(455)], 0.1, 2.2, LAND, [0, 1, 3], 'front_bed_e');
+
+  // ── ENTRANCE DRIVE, FENCE AND MAIN GATE ──
+  const FENCE_OFFSET = 26; // fence line distance from the road's centre line
+  const GATE_SPAN = 34; // opening between the gate pillars
+  const driveA = aerialToPlan(865, 845), driveB = aerialToPlan(950, 890); // the drive's direction, from the aerial
+
+  // Gate centre = where the drive's centre line meets the fence line.
+  const gateCentre = (() => {
+    const p0 = offset(roadStart, FENCE_OFFSET);
+    const dd = [driveB[0] - driveA[0], driveB[1] - driveA[1]];
+    const den = dd[0] * roadDir[1] - dd[1] * roadDir[0];
+    const t = ((p0[0] - driveA[0]) * roadDir[1] - (p0[1] - driveA[1]) * roadDir[0]) / den;
+    return [driveA[0] + dd[0] * t, driveA[1] + dd[1] * t];
+  })();
+  const gateAlongRoad = distanceAlongRoad(gateCentre);
+
+  {
+    // straight 30 ft drive from the end of the lot, through the gate, to the road edge
+    const d0 = [driveB[0] - driveA[0], driveB[1] - driveA[1]];
+    const dl = Math.hypot(...d0);
+    const u = [d0[0] / dl, d0[1] / dl];
+    const halfW = [-u[1] * 15, u[0] * 15];
+    const fromRoadCentre = (p) => (p[0] - roadStart[0]) * towardSite[0] + (p[1] - roadStart[1]) * towardSite[1];
+    const reach = (fromRoadCentre(gateCentre) - 14) / -(u[0] * towardSite[0] + u[1] * towardSite[1]);
+    const a = [gateCentre[0] - u[0] * 40, gateCentre[1] - u[1] * 40];
+    const b = [gateCentre[0] + u[0] * reach, gateCentre[1] + u[1] * reach];
+    flat([[a[0] + halfW[0], a[1] + halfW[1]], [b[0] + halfW[0], b[1] + halfW[1]], [b[0] - halfW[0], b[1] - halfW[1]], [a[0] - halfW[0], a[1] - halfW[1]]], PAVING_Y, mat.asphalt, SITE, 'entrance_drive');
+  }
+
+  /** Iron fence with stone piers along the road, from s0 to s1 (distances along the road). */
+  const fence = (s0, s1, name) => {
+    const a = offset(along(roadStart, s0), FENCE_OFFSET);
+    const b = offset(along(roadStart, s1), FENCE_OFFSET);
+    const length = Math.abs(s1 - s0);
+    const dir = Math.sign(s1 - s0);
+    const piers = Math.max(1, Math.round(length / 24));
+    for (let i = 0; i <= piers; i++) {
+      const p = offset(along(roadStart, s0 + (dir * length * i) / piers), FENCE_OFFSET);
+      box(1.6, 6.2, 1.6, mat.stone, SITE, p[0], 3.1, p[1], name + '_pier');
+      box(2.1, 0.4, 2.1, mat.trim, SITE, p[0], 6.4, p[1], name + '_pier_cap');
+    }
+    segment(a, b, 0.25, 0.25, 0.7, mat.iron, SITE, name + '_rail');
+    segment(a, b, 0.25, 0.25, 4.9, mat.iron, SITE, name + '_rail');
+    const pickets = [], spears = [];
+    for (let s = 0.6; s < length - 0.3; s += 0.55) {
+      const p = offset(along(roadStart, s0 + dir * s), FENCE_OFFSET);
+      const picket = new THREE.BoxGeometry(0.09, 4.8, 0.09);
+      picket.translate(p[0], 3.0, p[1]);
+      pickets.push(picket);
+      const spear = new THREE.ConeGeometry(0.12, 0.45, 4);
+      spear.translate(p[0], 5.6, p[1]);
+      spears.push(spear);
+    }
+    mesh(mergeGeometries(pickets), mat.iron, SITE, 0, 0, 0, name + '_pickets').castShadow = false;
+    mesh(mergeGeometries(spears), mat.gold, SITE, 0, 0, 0, name + '_spears').castShadow = false;
+  };
+  const clearingNorthEnd = distanceAlongRoad(aerialToPlan(1300, 240));
+  const clearingSouthEnd = distanceAlongRoad(aerialToPlan(860, 1060));
+  fence(gateAlongRoad + GATE_SPAN / 2 + 1.6, Math.max(clearingNorthEnd, gateAlongRoad + 60), 'fence_north');
+  fence(gateAlongRoad - GATE_SPAN / 2 - 1.6, Math.min(clearingSouthEnd, gateAlongRoad - 250), 'fence_south');
+  {
+    const p = offset(along(roadStart, gateAlongRoad + 110), FENCE_OFFSET);
+    labels.push({ name: 'Fence', dim: 'Along Barney Rd', site: true, x: p[0], y: 9, z: p[1] });
+  }
+
+  // Main gate: two domed stone pillars and two iron leaves swung open toward the site.
+  {
+    const pillarA = offset(along(roadStart, gateAlongRoad - GATE_SPAN / 2 - 1.6), FENCE_OFFSET);
+    const pillarB = offset(along(roadStart, gateAlongRoad + GATE_SPAN / 2 + 1.6), FENCE_OFFSET);
+    const gate = new THREE.Group();
+    gate.name = 'main_gate';
+    SITE.add(gate);
+    [pillarA, pillarB].forEach((p) => {
+      box(3.2, 10, 3.2, mat.stone, gate, p[0], 5, p[1], 'gate_pillar');
+      box(4, 0.6, 4, mat.trim, gate, p[0], 10.3, p[1], 'gate_pillar_cap');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [1.35, 0], [1.4, 0.5], [1.25, 1.1], [0.85, 1.75], [0.35, 2.15], [0, 2.3]]), 24), mat.dome, gate, p[0], 10.6, p[1], 'gate_pillar_dome');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [0.2, 0], [0.25, 0.3], [0.1, 0.5], [0.05, 1.2], [0, 1.4]]), 12), mat.gold, gate, p[0], 12.85, p[1], 'gate_finial');
+    });
+    const intoSite = [-towardSite[0], -towardSite[1]];
+    [[pillarA, 1], [pillarB, -1]].forEach(([p, side]) => {
+      const hinge = along(p, 1.6 * side);
+      const leaf = new THREE.Group();
+      leaf.name = 'gate_leaf';
+      leaf.position.set(hinge[0], 0, hinge[1]);
+      gate.add(leaf);
+      const leafW = GATE_SPAN / 2 - 0.2;
+      [0.6, 6.6].forEach((y) => box(leafW, 0.3, 0.3, mat.iron, leaf, leafW / 2, y, 0, 'gate_rail'));
+      for (let i = 0; i <= 16; i++) {
+        const barH = 6.2 + Math.sin((Math.PI * i) / 16) * 1.4; // bars rise toward the middle
+        box(0.12, barH, 0.12, mat.iron, leaf, (i / 16) * leafW, 0.6 + barH / 2, 0, 'gate_bar');
+        box(0.14, 0.45, 0.14, mat.gold, leaf, (i / 16) * leafW, 0.6 + barH + 0.2, 0, 'gate_spear');
+      }
+      // swing the leaf most of the way open
+      const closedAngle = Math.atan2(roadDir[1] * side, roadDir[0] * side);
+      const openAngle = Math.atan2(intoSite[1], intoSite[0]);
+      let swing = openAngle - closedAngle;
+      while (swing > Math.PI) swing -= 2 * Math.PI;
+      while (swing < -Math.PI) swing += 2 * Math.PI;
+      leaf.rotation.y = -(closedAngle + swing * 0.72);
+    });
+    labels.push({ name: 'Main gate', dim: 'Entrance from Barney Rd', site: true, x: gateCentre[0], y: 16, z: gateCentre[1] });
+  }
+
+  // ── WOODS: trees everywhere outside the clearing, on this side of the road ──
   if (opt.trees) {
-    const tr = [], c1 = [], c2 = [];
-    for (let v = -500; v <= 1900; v += 48) for (let u = -600; u <= 1700; u += 48) {
-      const pu = u + (rnd() - 0.5) * 40, pv = v + (rnd() - 0.5) * 40;
-      const roadU = 735 + (1350 - pv) / 1050 * 605;
-      if (pu > roadU - 95) continue;
-      if (inPoly([pu, pv], clearingU)) continue;
-      const p = U(pu, pv), s = 0.75 + rnd() * 0.6, hgt = 18 + rnd() * 18;
-      const tg = new THREE.CylinderGeometry(0.5 * s, 0.8 * s, hgt * 0.55, 6); tg.translate(p[0], hgt * 0.275, p[1]); tr.push(tg);
-      const cg = new THREE.IcosahedronGeometry(7 * s + rnd() * 3, 0); cg.scale(1, 1.25, 1); cg.translate(p[0], hgt * 0.62 + 4, p[1]);
-      (rnd() > 0.5 ? c1 : c2).push(cg);
+    const trunks = [], canopyLight = [], canopyDark = [];
+    for (let v = -500; v <= 1900; v += 48) {
+      for (let u = -600; u <= 1700; u += 48) {
+        const pu = u + (random() - 0.5) * 40;
+        const pv = v + (random() - 0.5) * 40;
+        const roadU = 735 + ((1350 - pv) / 1050) * 605;
+        if (pu > roadU - 95) continue; // too close to (or across) the road
+        if (insidePolygon([pu, pv], clearing)) continue; // inside the lawn
+        const p = aerialToPlan(pu, pv);
+        const size = 0.75 + random() * 0.6;
+        const treeH = 18 + random() * 18;
+        const trunk = new THREE.CylinderGeometry(0.5 * size, 0.8 * size, treeH * 0.55, 6);
+        trunk.translate(p[0], treeH * 0.275, p[1]);
+        trunks.push(trunk);
+        const canopy = new THREE.IcosahedronGeometry(7 * size + random() * 3, 0);
+        canopy.scale(1, 1.25, 1);
+        canopy.translate(p[0], treeH * 0.62 + 4, p[1]);
+        (random() > 0.5 ? canopyLight : canopyDark).push(canopy);
+      }
     }
-    if (tr.length) {
-      mesh(mergeGeos(tr), M.trunk, G.trees, 0, 0, 0, 'woods_trunks').castShadow = false;
-      mesh(mergeGeos(c1), M.leaf, G.trees, 0, 0, 0, 'woods_canopy_a');
-      mesh(mergeGeos(c2), M.leaf2, G.trees, 0, 0, 0, 'woods_canopy_b');
+    if (trunks.length) {
+      mesh(mergeGeometries(trunks), mat.trunk, groups.trees, 0, 0, 0, 'woods_trunks').castShadow = false;
+      mesh(mergeGeometries(canopyLight), mat.leaf, groups.trees, 0, 0, 0, 'woods_canopy_a');
+      mesh(mergeGeometries(canopyDark), mat.leafDark, groups.trees, 0, 0, 0, 'woods_canopy_b');
     }
-    for (let s = sG + span / 2 + 20; s < sNorth - 10; s += 45) { const p = off(along(rc0, s), FO + 12); mesh(new THREE.CylinderGeometry(0.5, 0.7, 7, 8), M.trunk, G.trees, p[0], 3.5, p[1]); mesh(new THREE.IcosahedronGeometry(4.5, 1), M.leaf, G.trees, p[0], 9.5, p[1], 'street_tree'); }
+    // ornamental trees just inside the fence, north of the gate
+    for (let s = gateAlongRoad + GATE_SPAN / 2 + 20; s < clearingNorthEnd - 10; s += 45) {
+      const p = offset(along(roadStart, s), FENCE_OFFSET + 12);
+      mesh(new THREE.CylinderGeometry(0.5, 0.7, 7, 8), mat.trunk, groups.trees, p[0], 3.5, p[1]);
+      mesh(new THREE.IcosahedronGeometry(4.5, 1), mat.leaf, groups.trees, p[0], 9.5, p[1], 'street_tree');
+    }
   }
 
-  const north = new THREE.Vector3(-UX[1], 0, -UZ[1]).normalize();
-  // ── MINARETS — four, on the corners of the Masjid roof only (after the reference photo) ──
+  // Direction of true north in model axes (for the page's north arrow).
+  const north = new THREE.Vector3(-IMG_X_AXIS[1], 0, -IMG_Y_AXIS[1]).normalize();
+
+  // ───────────────────────────────── 9. MINARETS ─────────────────────────────────
+  // Four minarets, one on each corner of the Masjid roof (not over the Sahan), after the reference photo:
+  // square shaft → cornice with battlements → two smaller stages with glowing arched windows → dome → finial.
   if (!opt.cut) {
-    const glow = std(0xffd88a, { emissive: 0xd99a3a, emissiveIntensity: 0.55, roughness: 0.4 });
-    const yR = 3 + TWO + 1, mx0 = PX(329.5), mx1 = PX(503.5), mz0 = PZ(79), mz1 = PZ(252), ins = 4.6;
-    const litArch = (cx, cy, cz, ang, w, h) => { const g = new THREE.ExtrudeGeometry(pArch(w, h).s, { depth: 0.12, bevelEnabled: false, curveSegments: 10 }); const m = new THREE.Mesh(g, glow); m.position.set(cx, cy, cz); m.rotation.y = ang; m.name = 'minaret_window'; G.dome.add(m); };
-    [[mx0 + ins, mz0 + ins], [mx1 - ins, mz0 + ins], [mx0 + ins, mz1 - ins], [mx1 - ins, mz1 - ins]].forEach(([x, z]) => {
-      let y = yR; const sw = 6.6, sh = 19;
-      box(sw, sh, sw, M.wall, G.dome, x, y + sh / 2, z, 'minaret_shaft');
-      y += sh;
-      box(sw + 1.1, 0.7, sw + 1.1, M.trim, G.dome, x, y + 0.35, z, 'minaret_cornice'); y += 0.7;
-      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2, nx = Math.sin(ang), nz = Math.cos(ang), tx = Math.cos(ang), tz = -Math.sin(ang);
-        for (let k = -2; k <= 2; k++) box(0.55, 0.7, 0.3, M.trim, G.dome, x + nx * (sw + 0.8) / 2 + tx * k * 1.45, y + 0.35, z + nz * (sw + 0.8) / 2 + tz * k * 1.45, 'minaret_merlon'); }
-      const w1 = 5.4, h1 = 7.2; y += 0.2;
-      box(w1, h1, w1, M.wall, G.dome, x, y + h1 / 2, z, 'minaret_stage1');
-      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2; litArch(x + Math.sin(ang) * (w1 / 2 + 0.01), y + 1.2, z + Math.cos(ang) * (w1 / 2 + 0.01), ang, 2.1, 4.6); }
-      y += h1; box(w1 + 0.7, 0.45, w1 + 0.7, M.trim, G.dome, x, y + 0.22, z, 'minaret_band'); y += 0.45;
-      const w2 = 4.4, h2 = 4.6;
-      box(w2, h2, w2, M.wall, G.dome, x, y + h2 / 2, z, 'minaret_stage2');
-      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2; litArch(x + Math.sin(ang) * (w2 / 2 + 0.01), y + 0.8, z + Math.cos(ang) * (w2 / 2 + 0.01), ang, 1.5, 3.0); }
-      y += h2; box(w2 + 0.6, 0.4, w2 + 0.6, M.trim, G.dome, x, y + 0.2, z, 'minaret_band'); y += 0.4;
-      const dp = [[0, 0], [2.15, 0], [2.25, 0.5], [2.1, 1.3], [1.7, 2.2], [1.05, 3.0], [0.4, 3.5], [0, 3.65]].map(q => new THREE.Vector2(q[0], q[1]));
-      mesh(new THREE.LatheGeometry(dp, 32), M.dome, G.dome, x, y, z, 'minaret_dome');
-      mesh(new THREE.LatheGeometry([[0, 0], [0.18, 0], [0.22, 0.25], [0.08, 0.45], [0.04, 1.1], [0, 1.3]].map(q => new THREE.Vector2(q[0], q[1])), 10), M.gold, G.dome, x, y + 3.55, z, 'minaret_finial');
+    const glow = material(0xffd88a, { emissive: 0xd99a3a, emissiveIntensity: 0.55, roughness: 0.4 });
+    const masjidLeft = planX(329.5), masjidRight = planX(503.5), masjidTop = planZ(79), masjidBottom = planZ(252);
+    const INSET = 4.6; // distance from the roof corner to the minaret centre
+
+    const glowingWindow = (x, y, z, faceAngle, w, h) => {
+      const g = new THREE.ExtrudeGeometry(pointedArch(w, h).s, { depth: 0.12, bevelEnabled: false, curveSegments: 10 });
+      const m = new THREE.Mesh(g, glow);
+      m.position.set(x, y, z);
+      m.rotation.y = faceAngle;
+      m.name = 'minaret_window';
+      groups.dome.add(m);
+    };
+
+    const corners = [
+      [masjidLeft + INSET, masjidTop + INSET], [masjidRight - INSET, masjidTop + INSET],
+      [masjidLeft + INSET, masjidBottom - INSET], [masjidRight - INSET, masjidBottom - INSET],
+    ];
+    corners.forEach(([x, z]) => {
+      const D = groups.dome;
+      let y = masjidRoofTop;
+
+      // shaft
+      const shaftW = 6.6, shaftH = 19;
+      box(shaftW, shaftH, shaftW, mat.wall, D, x, y + shaftH / 2, z, 'minaret_shaft');
+      y += shaftH;
+      box(shaftW + 1.1, 0.7, shaftW + 1.1, mat.trim, D, x, y + 0.35, z, 'minaret_cornice');
+      y += 0.7;
+      // battlements: 5 small blocks on each side
+      for (let face = 0; face < 4; face++) {
+        const ang = (face * Math.PI) / 2;
+        const nx = Math.sin(ang), nz = Math.cos(ang), tx = Math.cos(ang), tz = -Math.sin(ang);
+        for (let k = -2; k <= 2; k++) {
+          box(0.55, 0.7, 0.3, mat.trim, D, x + (nx * (shaftW + 0.8)) / 2 + tx * k * 1.45, y + 0.35, z + (nz * (shaftW + 0.8)) / 2 + tz * k * 1.45, 'minaret_merlon');
+        }
+      }
+
+      // first stage
+      const stage1W = 5.4, stage1H = 7.2;
+      y += 0.2;
+      box(stage1W, stage1H, stage1W, mat.wall, D, x, y + stage1H / 2, z, 'minaret_stage1');
+      for (let face = 0; face < 4; face++) {
+        const ang = (face * Math.PI) / 2;
+        glowingWindow(x + Math.sin(ang) * (stage1W / 2 + 0.01), y + 1.2, z + Math.cos(ang) * (stage1W / 2 + 0.01), ang, 2.1, 4.6);
+      }
+      y += stage1H;
+      box(stage1W + 0.7, 0.45, stage1W + 0.7, mat.trim, D, x, y + 0.22, z, 'minaret_band');
+      y += 0.45;
+
+      // second stage
+      const stage2W = 4.4, stage2H = 4.6;
+      box(stage2W, stage2H, stage2W, mat.wall, D, x, y + stage2H / 2, z, 'minaret_stage2');
+      for (let face = 0; face < 4; face++) {
+        const ang = (face * Math.PI) / 2;
+        glowingWindow(x + Math.sin(ang) * (stage2W / 2 + 0.01), y + 0.8, z + Math.cos(ang) * (stage2W / 2 + 0.01), ang, 1.5, 3.0);
+      }
+      y += stage2H;
+      box(stage2W + 0.6, 0.4, stage2W + 0.6, mat.trim, D, x, y + 0.2, z, 'minaret_band');
+      y += 0.4;
+
+      // dome and finial
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [2.15, 0], [2.25, 0.5], [2.1, 1.3], [1.7, 2.2], [1.05, 3.0], [0.4, 3.5], [0, 3.65]]), 32), mat.dome, D, x, y, z, 'minaret_dome');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [0.18, 0], [0.22, 0.25], [0.08, 0.45], [0.04, 1.1], [0, 1.3]]), 10), mat.gold, D, x, y + 3.55, z, 'minaret_finial');
     });
   }
-  [[WIN.frame, M.trim, G.walls, 'window_frames'], [WIN.glass, M_winGlass, G.glass, 'window_glass'], [WIN.bar, M.trim, G.walls, 'window_mullions'], [WIN.lat, M_lattice, G.walls, 'lattice_windows'], [WIN.dglass, M.doorGlass, G.glass, 'door_fanlight'], [WIN.dbar, M.doorFrame, G.walls, 'door_fanlight_bars']]
-    .forEach(([list, mat, par, nm]) => { if (list.length) { const m = mesh(mergeGeos(list), mat, par, 0, 0, 0, nm); m.castShadow = false; } });
 
-  return { root, groups: G, labels, pickables, zones: ZONES, center: new THREE.Vector3(98.5, 0, 111), north, siteU: U, entry: { cc, gc, ecx, stepsEnd } };
+  // ── Merge all window pieces into a handful of shapes (much faster to draw) ──
+  [
+    [windowParts.frame, mat.trim, groups.walls, 'window_frames'],
+    [windowParts.glass, windowGlassMat, groups.glass, 'window_glass'],
+    [windowParts.bar, mat.trim, groups.walls, 'window_mullions'],
+    [windowParts.lattice, latticeMat, groups.walls, 'lattice_windows'],
+    [windowParts.doorGlass, mat.doorGlass, groups.glass, 'door_fanlight'],
+    [windowParts.doorBar, mat.doorFrame, groups.walls, 'door_fanlight_bars'],
+  ].forEach(([list, m, parent, name]) => {
+    if (list.length) mesh(mergeGeometries(list), m, parent, 0, 0, 0, name).castShadow = false;
+  });
+
+  // What the page needs back from the builder.
+  return {
+    root,
+    groups,
+    labels,
+    pickables,
+    zones: ZONES,
+    center: new THREE.Vector3(98.5, 0, 111), // the page centres the view on this point
+    north,
+    siteU: aerialToPlan,
+    entry: { cc: circleCentre, gc: gateCentre, ecx: entranceX, stepsEnd },
+  };
 }
+
+// Lets the same file be used by the 3D-file exporter (Node.js) as well as the web page.
 if (typeof module !== 'undefined') module.exports = { buildMasjid };
 
 </script>
 <script>
+/* =====================================================================================
+   PAGE SCRIPT — sets up the 3D view and connects the sidebar buttons to the model.
+   The model itself is built by buildMasjid() in the script above.
+   ===================================================================================== */
 (function () {
-  const stage = document.getElementById('stage'), labelsEl = document.getElementById('labels');
+  // ── 1. The 3D view: renderer, camera, mouse/touch controls, lighting ──
+  const stage = document.getElementById('stage');
+  const labelLayer = document.getElementById('labels');
+
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.9;
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.9;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   stage.appendChild(renderer.domElement);
+
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(38, 1, 2, 6000);
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true; controls.dampingFactor = 0.08; controls.maxPolarAngle = Math.PI * 0.497; controls.minDistance = 12; controls.maxDistance = 1600;
 
+  // Drag to orbit, scroll/pinch to zoom, right-drag to pan.
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.maxPolarAngle = Math.PI * 0.497; // never look from below the ground
+  controls.minDistance = 12;
+  controls.maxDistance = 1600;
+  controls.autoRotateSpeed = 0.5;
+
+  // Soft sky light plus a sun that casts shadows.
   scene.add(new THREE.HemisphereLight(0xf4f1ea, 0x5d6b57, 0.55));
   const sun = new THREE.DirectionalLight(0xfff1dc, 1.05);
-  sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(4096, 4096);
   Object.assign(sun.shadow.camera, { left: -260, right: 260, top: 260, bottom: -260, near: 10, far: 900 });
-  sun.shadow.bias = -0.0006; scene.add(sun); scene.add(sun.target);
-  sun.target.position.set(30, 0, 30); sun.position.set(30 + 160, 260, 30 + 220);
+  sun.shadow.bias = -0.0006;
+  scene.add(sun);
+  scene.add(sun.target);
+  sun.target.position.set(30, 0, 30);
+  sun.position.set(30 + 160, 260, 30 + 220);
 
-  let model = null, labelEls = [], selected = null;
-  const state = { roof: true, dome: true, furn: true, trees: true, lbl: true, spin: false, lv: 'full' };
+  // ── 2. What the sidebar currently has switched on ──
+  const state = {
+    roof: true, // Roofs
+    dome: true, // Dome & minaras
+    furn: true, // Furnishings
+    trees: true, // Trees
+    lbl: true, // Labels
+    spin: false, // Slow spin
+    lv: 'full', // Floors: 'full' (both), 'ground', or 'cut' (plan cut)
+  };
 
+  let model = null; // what buildMasjid() returned
+  let labelTags = []; // one HTML tag per model label
+  let selected = null; // the floor currently highlighted by a tap
+
+  // ── 3. Build (or rebuild) the model ──
   function build() {
-    if (model) { scene.remove(model.root); model.root.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+    // Remove the old model first.
+    if (model) {
+      scene.remove(model.root);
+      model.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+
+    // "Ground" cuts walls just below the upper floor; "Plan cut" cuts them at 4 ft.
     const cut = state.lv === 'ground' ? 14.6 : state.lv === 'cut' ? 4 : 0;
     model = buildMasjid(THREE, { cut, furniture: true, trees: true });
-    model.root.position.set(-model.center.x, 0, -model.center.z);
+    model.root.position.set(-model.center.x, 0, -model.center.z); // centre the model on screen
     scene.add(model.root);
-    labelsEl.innerHTML = '';
-    labelEls = model.labels.map(L => {
-      const d = document.createElement('div'); d.className = 'lbl' + (L.big ? ' big' : '') + (L.site ? ' site' : '') + (L.upper ? ' upper' : '');
-      d.innerHTML = L.name + (L.dim ? '<small>' + L.dim + '</small>' : ''); labelsEl.appendChild(d);
-      return { el: d, v: new THREE.Vector3(L.x - model.center.x, L.y, L.z - model.center.z), big: L.big, site: L.site, upper: L.upper };
+
+    // Create the text tags that float over the model.
+    labelLayer.innerHTML = '';
+    labelTags = model.labels.map((L) => {
+      const tag = document.createElement('div');
+      tag.className = 'lbl' + (L.big ? ' big' : '') + (L.site ? ' site' : '') + (L.upper ? ' upper' : '');
+      tag.innerHTML = L.name + (L.dim ? '<small>' + L.dim + '</small>' : '');
+      labelLayer.appendChild(tag);
+      return {
+        el: tag,
+        pos: new THREE.Vector3(L.x - model.center.x, L.y, L.z - model.center.z),
+        big: L.big, site: L.site, upper: L.upper,
+      };
     });
-    const lg = document.getElementById('legend');
-    if (!lg.children.length) {
-      lg.innerHTML = Object.values(model.zones).map(z => '<span><i style="background:#' + z.c.toString(16).padStart(6, '0') + '"></i>' + z.n + '</span>').join('') ;
+
+    // Fill in the colour key once.
+    const legend = document.getElementById('legend');
+    if (!legend.children.length) {
+      legend.innerHTML = Object.values(model.zones)
+        .map((z) => '<span><i style="background:#' + z.c.toString(16).padStart(6, '0') + '"></i>' + z.n + '</span>')
+        .join('');
     }
-    applyVis();
-    selected = null; document.getElementById('card').hidden = true;
-  }
-  function applyVis() {
-    const G = model.groups, full = state.lv === 'full';
-    G.roofs.visible = state.roof && full; G.dome.visible = state.dome && state.roof && full; G.furniture.visible = state.furn; G.trees.visible = state.trees;
-    document.getElementById('l-roof').classList.toggle('off', !full); document.getElementById('l-dome').classList.toggle('off', !full || !state.roof);
-    labelsEl.hidden = !state.lbl;
+
+    applyVisibility();
+    selected = null;
+    document.getElementById('card').hidden = true;
   }
 
-  function themeBg() {
-    const css = getComputedStyle(document.documentElement).getPropertyValue('--scene').trim() || '#dbe3dc';
-    scene.background = new THREE.Color(css); scene.fog = new THREE.Fog(scene.background, 2200, 5000);
+  // ── 4. Show/hide parts of the model to match the checkboxes ──
+  function applyVisibility() {
+    const groups = model.groups;
+    const bothFloors = state.lv === 'full';
+    groups.roofs.visible = state.roof && bothFloors;
+    groups.dome.visible = state.dome && state.roof && bothFloors; // dome & minaras sit on the roof
+    groups.furniture.visible = state.furn;
+    groups.trees.visible = state.trees;
+    // grey out checkboxes that don't apply right now
+    document.getElementById('l-roof').classList.toggle('off', !bothFloors);
+    document.getElementById('l-dome').classList.toggle('off', !bothFloors || !state.roof);
+    labelLayer.hidden = !state.lbl;
   }
-  themeBg();
-  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeBg); } catch (e) {}
-  new MutationObserver(themeBg).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-  // views (drawing feet; model is centred on 98.5, 111)
+  // ── 5. Background colour follows light/dark mode ──
+  function updateBackground() {
+    const colour = getComputedStyle(document.documentElement).getPropertyValue('--scene').trim() || '#dbe3dc';
+    scene.background = new THREE.Color(colour);
+    scene.fog = new THREE.Fog(scene.background, 2200, 5000);
+  }
+  updateBackground();
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateBackground); } catch (e) {}
+  new MutationObserver(updateBackground).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  // ── 6. Preset camera views (the "Views" buttons) ──
+  // Positions are in model feet; P() shifts them to match the centred model.
+  //   look = the point the camera looks at, from = where the camera stands,
+  //   roof = whether roofs are shown for this view.
   const P = (x, y, z) => new THREE.Vector3(x - 98.5, y, z - 111);
   const VIEWS = {
-    overview: { t: P(110, 10, 110), p: P(340, 190, 330), roof: true },
-    site: { t: P(170, 0, 175), p: P(560, 470, 560), roof: true },
-    gate: { t: P(140, 22, 95), p: P(318, 7, 190), roof: true },
-    entry: { t: P(139, 8, 140), p: P(139, 38, 255), roof: true },
-    dome: { t: P(138.6, 48, 21), p: P(215, 60, 108), roof: true },
-    masjid: { t: P(138, 6, 30), p: P(215, 110, 115), roof: false },
-    sahan: { t: P(145, 5, 88), p: P(190, 95, 175), roof: false },
-    ramp: { t: P(120, 1, 122), p: P(85, 22, 165), roof: true },
-    mihrab: { t: P(138, 10, -2), p: P(155, 28, -50), roof: true },
-    mawaid: { t: P(48, 3, 135), p: P(128, 125, 205), roof: false },
-    madressah: { t: P(46, 3, 185), p: P(146, 120, 270), roof: false },
-    plan: { t: P(150, 0, 160), p: P(150, 760, 160.5), roof: false }
+    overview:  { look: P(110, 10, 110),  from: P(340, 190, 330),  roof: true },
+    site:      { look: P(170, 0, 175),   from: P(560, 470, 560),  roof: true },
+    gate:      { look: P(140, 22, 95),   from: P(318, 7, 190),    roof: true },
+    entry:     { look: P(139, 8, 140),   from: P(139, 38, 255),   roof: true },
+    dome:      { look: P(138.6, 48, 21), from: P(215, 60, 108),   roof: true },
+    masjid:    { look: P(138, 6, 30),    from: P(215, 110, 115),  roof: false },
+    sahan:     { look: P(145, 5, 88),    from: P(190, 95, 175),   roof: false },
+    ramp:      { look: P(120, 1, 122),   from: P(85, 22, 165),    roof: true },
+    mihrab:    { look: P(138, 7, -4),    from: P(160, 26, -58),   roof: true }, // the "Qibla" button
+    mawaid:    { look: P(48, 3, 135),    from: P(128, 125, 205),  roof: false },
+    madressah: { look: P(46, 3, 185),    from: P(146, 120, 270),  roof: false },
+    plan:      { look: P(150, 0, 160),   from: P(150, 760, 160.5), roof: false },
   };
-  let tween = null;
-  function setPressed(sel, attr, val) { document.querySelectorAll(sel).forEach(b => b.setAttribute('aria-pressed', b.dataset[attr] === val ? 'true' : 'false')); }
-  function go(name, instant) {
-    const v = VIEWS[name]; if (!v) return;
-    setPressed('#views button', 'view', name);
-    if (v.roof !== undefined && v.roof !== state.roof) { state.roof = v.roof; document.getElementById('t-roof').checked = v.roof; applyVis(); }
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (instant || reduce) { camera.position.copy(v.p); controls.target.copy(v.t); controls.update(); return; }
-    tween = { p0: camera.position.clone(), t0: controls.target.clone(), p1: v.p.clone(), t1: v.t.clone(), s: performance.now(), d: 1300 };
+
+  let flight = null; // the camera move in progress, if any
+
+  /** Mark one button in a group as pressed. */
+  function setPressed(selector, dataKey, value) {
+    document.querySelectorAll(selector).forEach((b) => b.setAttribute('aria-pressed', b.dataset[dataKey] === value ? 'true' : 'false'));
   }
-  document.getElementById('views').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.view); });
-  controls.addEventListener('start', () => { tween = null; setPressed('#views button', 'view', ''); });
-  document.getElementById('levels').addEventListener('click', e => {
-    const b = e.target.closest('button'); if (!b || b.dataset.lv === state.lv) return;
-    state.lv = b.dataset.lv; setPressed('#levels button', 'lv', state.lv); build();
+
+  /** Move the camera to a preset view (smoothly, unless `instant`). */
+  function goToView(name, instant) {
+    const view = VIEWS[name];
+    if (!view) return;
+    setPressed('#views button', 'view', name);
+    if (view.roof !== state.roof) {
+      state.roof = view.roof;
+      document.getElementById('t-roof').checked = view.roof;
+      applyVisibility();
+    }
+    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (instant || reduceMotion) {
+      camera.position.copy(view.from);
+      controls.target.copy(view.look);
+      controls.update();
+      return;
+    }
+    flight = {
+      fromPos: camera.position.clone(), fromLook: controls.target.clone(),
+      toPos: view.from.clone(), toLook: view.look.clone(),
+      start: performance.now(), duration: 1300,
+    };
+  }
+
+  // ── 7. Sidebar buttons and checkboxes ──
+  document.getElementById('views').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b) goToView(b.dataset.view);
+  });
+  // Dragging the view yourself cancels any camera move and un-highlights the view button.
+  controls.addEventListener('start', () => {
+    flight = null;
+    setPressed('#views button', 'view', '');
   });
 
-  [['t-roof', 'roof'], ['t-dome', 'dome'], ['t-furn', 'furn'], ['t-trees', 'trees'], ['t-lbl', 'lbl'], ['t-spin', 'spin']].forEach(([id, k]) => {
-    const el = document.getElementById(id);
-    el.addEventListener('change', () => { state[k] = el.checked; applyVis(); controls.autoRotate = state.spin; });
+  document.getElementById('levels').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.lv === state.lv) return;
+    state.lv = b.dataset.lv;
+    setPressed('#levels button', 'lv', state.lv);
+    build(); // walls are cut at a different height, so rebuild
   });
-  controls.autoRotateSpeed = 0.5;
-  const ctrl = document.getElementById('ctrl'), col = document.getElementById('collapse');
-  const opener = document.getElementById('opener');
-  const setPanel = open => { ctrl.hidden = !open; opener.hidden = open; col.setAttribute('aria-expanded', String(open)); try { localStorage.setItem('panelOpen', open ? '1' : '0'); } catch (e) {} (open ? col : opener).focus({ preventScroll: true }); };
-  col.addEventListener('click', () => setPanel(false));
-  opener.addEventListener('click', () => setPanel(true));
-  try { if (localStorage.getItem('panelOpen') === '0') { ctrl.hidden = true; opener.hidden = false; } else if (innerWidth < 640) { ctrl.hidden = true; opener.hidden = false; } } catch (e) {}
 
-  // picking
-  const ray = new THREE.Raycaster(), ptr = new THREE.Vector2(); let down = null;
-  renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
-  renderer.domElement.addEventListener('pointerup', e => {
-    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+  const checkboxes = { 't-roof': 'roof', 't-dome': 'dome', 't-furn': 'furn', 't-trees': 'trees', 't-lbl': 'lbl', 't-spin': 'spin' };
+  Object.entries(checkboxes).forEach(([id, key]) => {
+    const box = document.getElementById(id);
+    box.addEventListener('change', () => {
+      state[key] = box.checked;
+      applyVisibility();
+      controls.autoRotate = state.spin;
+    });
+  });
+
+  // Close / open the sidebar. The choice is remembered; phones start with it closed.
+  const sidebar = document.getElementById('ctrl');
+  const closeButton = document.getElementById('collapse');
+  const openButton = document.getElementById('opener');
+  function setSidebar(open) {
+    sidebar.hidden = !open;
+    openButton.hidden = open;
+    closeButton.setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem('panelOpen', open ? '1' : '0'); } catch (e) {}
+    (open ? closeButton : openButton).focus({ preventScroll: true });
+  }
+  closeButton.addEventListener('click', () => setSidebar(false));
+  openButton.addEventListener('click', () => setSidebar(true));
+  try {
+    if (localStorage.getItem('panelOpen') === '0' || innerWidth < 640) {
+      sidebar.hidden = true;
+      openButton.hidden = false;
+    }
+  } catch (e) {}
+
+  // ── 8. Tap a room to see its info card ──
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+  let pressAt = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => { pressAt = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    // ignore drags — only a tap selects
+    if (!pressAt || Math.hypot(e.clientX - pressAt[0], e.clientY - pressAt[1]) > 5) return;
     const r = renderer.domElement.getBoundingClientRect();
-    ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ptr, camera);
-    const vis = model.pickables.filter(o => o.parent.visible);
-    const hit = ray.intersectObjects(vis, false)[0];
-    select(hit ? hit.object : null);
+    pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    const visibleFloors = model.pickables.filter((o) => o.parent.visible);
+    const hit = raycaster.intersectObjects(visibleFloors, false)[0];
+    selectRoom(hit ? hit.object : null);
   });
-  function select(o) {
-    if (selected) selected.material[2].emissive.setHex(0x000000);
-    selected = o; const card = document.getElementById('card');
-    if (!o) { card.hidden = true; return; }
-    o.material[2] = o.material[2].clone(); o.material[2].emissive.setHex(0x3a3010);
-    const u = o.userData;
-    document.getElementById('c-zone').textContent = u.zone;
-    document.getElementById('c-name').textContent = u.name;
-    document.getElementById('c-dim').textContent = u.dim || 'Size not printed on the sheet';
-    document.getElementById('c-meta').textContent = [u.level ? 'Floor level ' + u.level : '', u.note].filter(Boolean).join(' · ');
+
+  function selectRoom(floor) {
+    if (selected) selected.material[2].emissive.setHex(0x000000); // un-highlight the previous room
+    selected = floor;
+    const card = document.getElementById('card');
+    if (!floor) { card.hidden = true; return; }
+    floor.material[2] = floor.material[2].clone(); // [2] = the floor's top face
+    floor.material[2].emissive.setHex(0x3a3010);
+    const info = floor.userData;
+    document.getElementById('c-zone').textContent = info.zone;
+    document.getElementById('c-name').textContent = info.name;
+    document.getElementById('c-dim').textContent = info.dim || 'Size not printed on the sheet';
+    document.getElementById('c-meta').textContent = [info.level ? 'Floor level ' + info.level : '', info.note].filter(Boolean).join(' · ');
     card.hidden = false;
   }
 
-  function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  // ── 9. Keep the drawing sized to the window ──
+  function resize() {
+    renderer.setSize(innerWidth, innerHeight, false);
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+  }
   addEventListener('resize', resize);
-  const needle = document.getElementById('needle'), nlabel = document.getElementById('nlabel'), tmp = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
-  function loop(now) {
-    requestAnimationFrame(loop);
-    if (tween) {
-      const k = Math.min(1, (now - tween.s) / tween.d), e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-      camera.position.lerpVectors(tween.p0, tween.p1, e); controls.target.lerpVectors(tween.t0, tween.t1, e);
-      if (k >= 1) tween = null;
+
+  // ── 10. Every frame: move the camera, draw, turn the north arrow, place the labels ──
+  const needle = document.getElementById('needle');
+  const northLetter = document.getElementById('nlabel');
+  const screenPos = new THREE.Vector3(), groundA = new THREE.Vector3(), groundB = new THREE.Vector3();
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+
+    // smooth camera move (ease in and out)
+    if (flight) {
+      const k = Math.min(1, (now - flight.start) / flight.duration);
+      const ease = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      camera.position.lerpVectors(flight.fromPos, flight.toPos, ease);
+      controls.target.lerpVectors(flight.fromLook, flight.toLook, ease);
+      if (k >= 1) flight = null;
     }
     controls.update();
     renderer.render(scene, camera);
-    // true north arrow: project a north-pointing ground vector to the screen
-    a.copy(controls.target).setY(0); b.copy(a).addScaledVector(model.north, 30);
-    a.project(camera); b.project(camera);
-    const ang = Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI;
-    needle.setAttribute('transform', 'rotate(' + ang.toFixed(1) + ')');
-    const rad = (ang - 90) * Math.PI / 180; nlabel.setAttribute('x', (Math.cos(rad) * 9).toFixed(1)); nlabel.setAttribute('y', (Math.sin(rad) * 9).toFixed(1));
+
+    // North arrow: see which way true north points on screen.
+    groundA.copy(controls.target).setY(0);
+    groundB.copy(groundA).addScaledVector(model.north, 30);
+    groundA.project(camera);
+    groundB.project(camera);
+    const angle = (Math.atan2(groundB.x - groundA.x, groundB.y - groundA.y) * 180) / Math.PI;
+    needle.setAttribute('transform', 'rotate(' + angle.toFixed(1) + ')');
+    const rad = ((angle - 90) * Math.PI) / 180;
+    northLetter.setAttribute('x', (Math.cos(rad) * 9).toFixed(1));
+    northLetter.setAttribute('y', (Math.sin(rad) * 9).toFixed(1));
+
+    // Labels: site labels show from far away; room labels only when zoomed in close.
     if (state.lbl) {
-      const W = innerWidth, H = innerHeight, dist = camera.position.distanceTo(controls.target);
-      for (const L of labelEls) {
-        tmp.copy(L.v).project(camera);
-        let show = (L.big || L.site) ? dist < 1100 : (dist < 170 && camera.position.distanceTo(L.v) < 200);
-        if (L.upper && (state.lv !== 'full' || state.roof)) show = false;
-        if (tmp.z > 1 || !show || Math.abs(tmp.x) > 1.1 || Math.abs(tmp.y) > 1.1) { L.el.style.display = 'none'; continue; }
-        L.el.style.display = ''; L.el.style.left = ((tmp.x + 1) / 2 * W).toFixed(1) + 'px'; L.el.style.top = ((1 - tmp.y) / 2 * H).toFixed(1) + 'px';
+      const viewDistance = camera.position.distanceTo(controls.target);
+      for (const tag of labelTags) {
+        screenPos.copy(tag.pos).project(camera);
+        let show = tag.big || tag.site ? viewDistance < 1100 : viewDistance < 170 && camera.position.distanceTo(tag.pos) < 200;
+        if (tag.upper && (state.lv !== 'full' || state.roof)) show = false; // upper-floor tags only with roofs off
+        const offScreen = screenPos.z > 1 || Math.abs(screenPos.x) > 1.1 || Math.abs(screenPos.y) > 1.1;
+        if (!show || offScreen) { tag.el.style.display = 'none'; continue; }
+        tag.el.style.display = '';
+        tag.el.style.left = (((screenPos.x + 1) / 2) * innerWidth).toFixed(1) + 'px';
+        tag.el.style.top = (((1 - screenPos.y) / 2) * innerHeight).toFixed(1) + 'px';
       }
     }
   }
-  build(); resize(); go('overview', true); requestAnimationFrame(loop);
+
+  // ── Start ──
+  build();
+  resize();
+  goToView('overview', true);
+  requestAnimationFrame(frame);
 })();
 </script>
 
