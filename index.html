@@ -257,6 +257,7 @@ function buildMasjid(THREE, options) {
     lamp: material(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 }),
     // frosted glass with a geometric star pattern (entrance front), see starPatternTexture()
     doorGlass: material(typeof document === 'undefined' ? 0xc3cfd3 : 0xffffff, { roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.88, map: starPatternTexture() }),
+    plainDoorGlass: material(0x8fb2c6, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.5 }), // the door leaves themselves: clear, no pattern
     bronze: material(0x5b3a24, { roughness: 0.4, metalness: 0.45 }), // entrance door and glass frames
     doorFrame: material(0x3a3d40, { roughness: 0.35, metalness: 0.6 }),
   };
@@ -477,7 +478,7 @@ function buildMasjid(THREE, options) {
       .filter((o) => o.v.some((v) => v[2] === 2))
       .forEach((o) => {
         const width = o.e - o.s;
-        const leaves = Math.max(2, Math.round(width / 3.2));
+        const leaves = 2; // a pair of large doors
         const frameBar = (s, e, y0, y1) => {
           const length = e - s;
           const h = Math.min(y1, topOfWall) - y0;
@@ -493,10 +494,8 @@ function buildMasjid(THREE, options) {
         frameBar(o.s, o.e, 7.6, 7.85); // crossbar
         frameBar(o.s, o.e, 9.25, 9.5); // top
         frameBar(o.s, o.e, 0, 0.3); // bottom
-        for (let i = 0; i < leaves; i++) {
-          const x = o.s + (width * (i + 0.5)) / leaves;
-          frameBar(x - 0.05, x + 0.05, 2.6, 5.0); // long pull handle
-        }
+        const middle = (o.s + o.e) / 2;
+        [-0.7, 0.7].forEach((dx) => frameBar(middle + dx - 0.05, middle + dx + 0.05, 2.6, 5.0)); // long pull handles, near where the doors meet
         if (!opt.cut) addArchOverDoor(axis, fixed, thick, base, o.s, o.e);
       });
 
@@ -516,11 +515,15 @@ function buildMasjid(THREE, options) {
         .filter((v) => opt.cut || v[2] !== 1)
         .sort((a, b) => a[0] - b[0]);
       // where a curtain wall overlaps a door, the curtain wall's glass already fills it
-      if (holes.some((v) => v[2] === 3)) holes = holes.filter((v) => v[2] === 3);
+      // (the door leaves stay clear glass up to the crossbar; the pattern is only around them)
+      if (holes.some((v) => v[2] === 3)) {
+        const curtainTop = holes.find((v) => v[2] === 3)[1];
+        holes = holes.some((v) => v[2] === 2) ? [[0, 7.6, 4], [7.6, curtainTop, 3]] : holes.filter((v) => v[2] === 3);
+      }
       let y = 0;
       for (const [bottom, top, glass] of holes) {
         if (bottom > y) piece(p, q, y, bottom, wallMat, thick); // wall below the opening
-        if (glass) piece(p, q, bottom, top, glass >= 2 ? mat.doorGlass : mat.glass, thick * 0.3);
+        if (glass) piece(p, q, bottom, top, glass === 4 ? mat.plainDoorGlass : glass >= 2 ? mat.doorGlass : mat.glass, thick * 0.3);
         y = Math.max(y, top);
       }
       piece(p, q, y, topOfWall, wallMat, thick); // wall above the last opening
