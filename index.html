@@ -109,7 +109,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outli
         <button data-view="gate" aria-pressed="false">From the gate</button>
         <button data-view="entry" aria-pressed="false">Entrance</button>
         <button data-view="ramp" aria-pressed="false">Ramp</button>
-        <button data-view="mihrab" aria-pressed="false">Mihrab</button>
+        <button data-view="mihrab" aria-pressed="false">Qibla</button>
         <button data-view="dome" aria-pressed="false">Dome</button>
         <button data-view="masjid" aria-pressed="false">Masjid</button>
         <button data-view="sahan" aria-pressed="false">Entry &amp; Sahan</button>
@@ -130,7 +130,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outli
       <h2>Show</h2>
       <div class="toggles">
         <label id="l-roof"><input type="checkbox" id="t-roof" checked><span>Roofs</span></label>
-        <label id="l-dome"><input type="checkbox" id="t-dome" checked><span>Dome</span></label>
+        <label id="l-dome"><input type="checkbox" id="t-dome" checked><span>Dome &amp; minaras</span></label>
         <label><input type="checkbox" id="t-furn" checked><span>Furnishings</span></label>
         <label><input type="checkbox" id="t-trees" checked><span>Trees</span></label>
         <label><input type="checkbox" id="t-lbl" checked><span>Labels</span></label>
@@ -245,13 +245,74 @@ function buildMasjid(THREE, opt) {
       for (let i = 0; i <= nLeaf; i++) { const x = o.s + W * i / nLeaf; fr(Math.max(o.s, x - 0.15), Math.min(o.e, x + 0.15), 0, 9.5); }
       fr(o.s, o.e, 7.6, 7.85); fr(o.s, o.e, 9.25, 9.5); fr(o.s, o.e, 0, 0.3);
       for (let i = 0; i < nLeaf; i++) { const x = o.s + W * (i + 0.5) / nLeaf; fr(x - 0.04, x + 0.04, 3.3, 4.3); }
+      if (!opt.cut) addArchDoor(ax, fixed, t, base, o.s, o.e, 9.5);
     });
     for (let i = 0; i < bps.length - 1; i++) {
       const p = bps[i], q = bps[i + 1];
-      const holes = ops.filter(o => o.s <= p + 1e-6 && o.e >= q - 1e-6).flatMap(o => o.v).sort((a, b) => a[0] - b[0]);
+      const holes = ops.filter(o => o.s <= p + 1e-6 && o.e >= q - 1e-6).flatMap(o => o.v).filter(v => opt.cut || v[2] !== 1).sort((a, b) => a[0] - b[0]);
       let y = 0;
       for (const [b, tp, gl] of holes) { if (b > y) put(p, q, y, b, mat, t); if (gl) put(p, q, b, tp, gl === 2 ? M.doorGlass : M.glass, t * 0.3); y = Math.max(y, tp); }
       put(p, q, y, hh, mat, t);
+    }
+    if (!opt.cut) {
+      const front = ax === 'x' && fixed > PZ(430) && fixed < PZ(470) && a0 > PX(320);
+      ops.forEach(o => o.v.forEach(v => { if (v[2] === 1) addWindows(ax, fixed, t, base, h, o.s, o.e, v[0], v[1], front); }));
+    }
+  }
+  // ── pointed-arch windows (after the reference photos) ──
+  const WIN = { frame: [], glass: [], bar: [], lat: [], dglass: [], dbar: [] };
+  const M_winGlass = std(0x46596a, { roughness: 0.15, metalness: 0.35 }), M_lattice = std(0xd6c29a, { roughness: 0.7 });
+  function pArch(w, h, k) {
+    const r = w * (k || 0.8), hw = w / 2, cL = -hw + r, cR = hw - r, th = Math.acos((hw - r) / r), hs = h - r * Math.sin(th);
+    const s = new THREE.Shape(); s.moveTo(-hw, 0); s.lineTo(-hw, hs); s.absarc(cL, hs, r, Math.PI, th, true); s.absarc(cR, hs, r, Math.PI - th, 0, true); s.lineTo(hw, 0); s.lineTo(-hw, 0);
+    return { s, hs, inside: (x, y, m) => Math.abs(x) < hw - m && y > m && (y < hs || (Math.hypot(x - cL, y - hs) < r - m && Math.hypot(x - cR, y - hs) < r - m)) };
+  }
+  function placeG(g, ax, fixed, t, side, s, y0, off) {
+    const rot = ax === 'x' ? (side > 0 ? 0 : Math.PI) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
+    const pos = ax === 'x' ? new THREE.Vector3(s, y0, fixed + side * t / 2) : new THREE.Vector3(fixed + side * t / 2, y0, s);
+    g.applyMatrix4(new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z).multiply(new THREE.Matrix4().makeRotationY(rot)).multiply(new THREE.Matrix4().makeTranslation(0, 0, off)));
+    return g;
+  }
+  // domed glass fanlight and surround over a glass door, springing from the door's transom; kept below the porch canopy
+  function addArchDoor(ax, fixed, t, base, s0, s1, head) {
+    const W = s1 - s0, hw = W / 2, sc = (s0 + s1) / 2, spring = 7.6, rise = Math.min(hw * 1.0, 16 - 0.6 - (base + spring));
+    const arcPts = (h, r) => { const p = []; for (let i = 0; i <= 40; i++) { const a = Math.PI * i / 40, c2 = Math.cos(a); p.push([-h * c2, r * Math.sin(a) * (1 + 0.18 * (1 - Math.abs(c2))) / 1.18]); } return p; };
+    const outline = (h, r, yb) => { const s = new THREE.Shape(); s.moveTo(-h, yb); arcPts(h, r).forEach(([x, y]) => s.lineTo(x, y)); s.lineTo(h, yb); s.lineTo(-h, yb); return s; };
+    const capS = () => { const s = new THREE.Shape(), p = arcPts(hw, rise); s.moveTo(p[0][0], p[0][1]); p.slice(1).forEach(([x, y]) => s.lineTo(x, y)); s.lineTo(p[0][0], p[0][1]); return s; };
+    const ex = (shape, d) => new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false });
+    const y0 = base + spring;
+    [1, -1].forEach(side => {
+      const F = outline(hw + 0.5, rise + 0.45, -spring); F.holes.push(outline(hw, rise, -spring + 0.01));
+      WIN.frame.push(placeG(ex(F, 0.26), ax, fixed, t, side, sc, y0, 0));
+      WIN.dglass.push(placeG(ex(capS(), 0.05), ax, fixed, t, side, sc, y0, 0.02));
+      const hb = new THREE.BoxGeometry(W, 0.25, 0.14); hb.translate(0, 0.12, 0.1); WIN.dbar.push(placeG(hb, ax, fixed, t, side, sc, y0, 0));
+      const vb = new THREE.BoxGeometry(0.2, rise, 0.14); vb.translate(0, rise / 2, 0.1); WIN.dbar.push(placeG(vb, ax, fixed, t, side, sc, y0, 0));
+      [-1, 1].forEach(k => { const L = Math.hypot(hw * 0.62, rise * 0.78), g = new THREE.BoxGeometry(0.16, L, 0.14); g.translate(0, L / 2, 0); g.applyMatrix4(new THREE.Matrix4().makeRotationZ(-k * Math.atan2(hw * 0.62, rise * 0.78))); g.translate(0, 0, 0.1); WIN.dbar.push(placeG(g, ax, fixed, t, side, sc, y0, 0)); });
+    });
+  }
+  function addWindows(ax, fixed, t, base, h, s0, s1, b, tp, front) {
+    const W = s1 - s0, n = Math.max(1, Math.ceil(W / 7)), cw = W / n, w = cw - 0.9;
+    if (w < 1.2) return;
+    const lim = (h > GF + 2 && b < GF) ? GF - 1.5 : h - 1.2, top = Math.min(Math.max(tp, b + w * 1.45), lim), hgt = top - b;
+    for (let i = 0; i < n; i++) {
+      const sc = s0 + cw * (i + 0.5), y0 = base + b;
+      [1, -1].forEach(side => {
+        const A = pArch(w, hgt), F = pArch(w + 0.7, hgt + 0.4);
+        const fs = F.s; fs.holes.push(A.s);
+        const ex = (shape, d) => new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false, curveSegments: 10 });
+        WIN.frame.push(placeG(ex(fs, 0.22), ax, fixed, t, side, sc, y0 - 0.2, 0));
+        WIN.glass.push(placeG(ex(pArch(w, hgt).s, 0.04), ax, fixed, t, side, sc, y0, 0.01));
+        if (front && side > 0) {
+          const L = pArch(w, hgt), sz = 0.2;
+          for (let y = 0.5; y < hgt; y += 0.62) for (let x = -w / 2 + 0.45 + ((Math.round(y / 0.62)) % 2) * 0.31; x < w / 2 - 0.3; x += 0.62)
+            if (L.inside(x, y, 0.38)) { const hp = new THREE.Path(); hp.moveTo(x, y - sz); hp.lineTo(x + sz, y); hp.lineTo(x, y + sz); hp.lineTo(x - sz, y); hp.lineTo(x, y - sz); L.s.holes.push(hp); }
+          WIN.lat.push(placeG(ex(L.s, 0.1), ax, fixed, t, side, sc, y0, 0.05));
+          if (top + 2.4 < h) { const dg = new THREE.BoxGeometry(1.3, 1.3, 0.14); dg.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 4)); WIN.lat.push(placeG(dg, ax, fixed, t, side, sc, top + 1.4, 0.07)); }
+        } else {
+          const vb = new THREE.BoxGeometry(0.16, hgt - 0.1, 0.12); vb.translate(0, hgt / 2, 0.08); WIN.bar.push(placeG(vb, ax, fixed, t, side, sc, y0, 0));
+          const hb = new THREE.BoxGeometry(w, 0.16, 0.12); hb.translate(0, A.hs, 0.08); WIN.bar.push(placeG(hb, ax, fixed, t, side, sc, y0, 0));
+        }
+      });
     }
   }
   function vRanges(k, two, h) {
@@ -394,24 +455,24 @@ function buildMasjid(THREE, opt) {
       ['W', 95, 116, 'tall'], ['W', 139, 160, 'tall'], ['W', 182.5, 202.5, 'tall'], ['W', 210, 219], ['W', 210, 219, 'uwin'], ['W', 228, 248, 'win'],
       ['E', 95, 116, 'tall'], ['E', 139, 160, 'tall'], ['E', 182.5, 202.5, 'tall'], ['E', 211, 220], ['E', 232, 247, 'win'],
       ['S', 360, 377.5, 'gate'], ['S', 407.5, 425, 'gate'], ['S', 455, 472.5, 'gate']] });
-  { // MIHRAB — semicircular niche projecting from the qibla wall
+  { // QIBLA — semicircular niche projecting from the qibla wall
     const mx = PX(418), mz = PZ(79), ri = 2.6, ro = 3.6, fl = 3, H = opt.cut ? opt.cut : 18;
     const s = new THREE.Shape(); s.absarc(0, 0, ro, 0, Math.PI, false); s.lineTo(-ri, 0); s.absarc(0, 0, ri, Math.PI, 0, true); s.lineTo(ro, 0);
     const g = new THREE.ExtrudeGeometry(s, { depth: H, bevelEnabled: false, curveSegments: 32 }); g.rotateX(-Math.PI / 2);
-    mesh(g, M.wall, G.walls, mx, fl, mz, 'mihrab_wall');
+    mesh(g, M.wall, G.walls, mx, fl, mz, 'qibla_wall');
     const fs = new THREE.Shape(); fs.absarc(0, 0, ri, 0, Math.PI, false); fs.lineTo(ri, 0);
     const fg = new THREE.ExtrudeGeometry(fs, { depth: 0.08, bevelEnabled: false, curveSegments: 32 }); fg.rotateX(-Math.PI / 2);
-    const fm = mesh(fg, std(ZONES.prayer.c, { roughness: 0.95 }), G.floors, mx, fl, mz + 0.5, 'mihrab_floor');
-    fm.userData = { name: 'Mihrab', dim: 'Semicircular niche on the qibla wall', zone: 'Prayer', level: "+3'0\"", note: 'Marks the qibla, the direction of prayer.' }; pickables.push(fm);
+    const fm = mesh(fg, std(ZONES.prayer.c, { roughness: 0.95 }), G.floors, mx, fl, mz + 0.5, 'qibla_floor');
+    fm.userData = { name: 'Qibla', dim: 'Semicircular niche on the qibla wall', zone: 'Prayer', level: "+3'0\"", note: 'Marks the qibla, the direction of prayer.' }; pickables.push(fm);
     // arched outline inside the niche and a gold band
     const band = new THREE.Mesh(new THREE.TorusGeometry(ri - 0.05, 0.12, 6, 32, Math.PI), M.gold); band.rotation.x = Math.PI / 2; band.rotation.z = Math.PI; band.position.set(mx, fl + 9, mz); G.furniture.add(band);
     if (!opt.cut) {
       const cap = new THREE.ExtrudeGeometry((() => { const c2 = new THREE.Shape(); c2.absarc(0, 0, ro + 0.4, 0, Math.PI, false); c2.lineTo(ro + 0.4, 0); return c2; })(), { depth: 0.8, bevelEnabled: false, curveSegments: 32 });
-      cap.rotateX(-Math.PI / 2); mesh(cap, M.trim, G.roofs, mx, fl + H, mz, 'mihrab_cornice');
-      mesh(new THREE.SphereGeometry(ro, 32, 12, Math.PI, Math.PI, 0, Math.PI / 2), M.dome, G.roofs, mx, fl + H + 0.8, mz, 'mihrab_semidome');
-      mesh(new THREE.LatheGeometry([[0, 0], [0.25, 0], [0.3, 0.3], [0.12, 0.55], [0.05, 1.4], [0, 1.7]].map(q => new THREE.Vector2(q[0], q[1])), 12), M.gold, G.roofs, mx, fl + H + 0.8 + ro - 0.1, mz - 0.6, 'mihrab_finial');
+      cap.rotateX(-Math.PI / 2); mesh(cap, M.trim, G.roofs, mx, fl + H, mz, 'qibla_cornice');
+      mesh(new THREE.SphereGeometry(ro, 32, 12, Math.PI, Math.PI, 0, Math.PI / 2), M.dome, G.roofs, mx, fl + H + 0.8, mz, 'qibla_semidome');
+      mesh(new THREE.LatheGeometry([[0, 0], [0.25, 0], [0.3, 0.3], [0.12, 0.55], [0.05, 1.4], [0, 1.7]].map(q => new THREE.Vector2(q[0], q[1])), 12), M.gold, G.roofs, mx, fl + H + 0.8 + ro - 0.1, mz - 0.6, 'qibla_finial');
     }
-    labels.push({ name: 'Mihrab', dim: 'Qibla', x: mx, y: fl + 5, z: mz - 1.5 });
+    labels.push({ name: 'Qibla', dim: '', x: mx, y: fl + 5, z: mz - 1.5 });
   }
   room({ name: 'Sound Control Room', dim: "7'6\" × 9'0\"", zone: 'admin', r: [503.5, 223.75, 528, 252], nw: ['W'], fl: 3, two: true, lvl: "+3'0\"", parapet: 'NE',
     note: 'Has a window looking into the Masjid.', o: [['S', 519, 528], ['N', 510, 526, 'win']] });
@@ -795,6 +856,34 @@ function buildMasjid(THREE, opt) {
   }
 
   const north = new THREE.Vector3(-UX[1], 0, -UZ[1]).normalize();
+  // ── MINARETS — four, on the corners of the Masjid roof only (after the reference photo) ──
+  if (!opt.cut) {
+    const glow = std(0xffd88a, { emissive: 0xd99a3a, emissiveIntensity: 0.55, roughness: 0.4 });
+    const yR = 3 + TWO + 1, mx0 = PX(329.5), mx1 = PX(503.5), mz0 = PZ(79), mz1 = PZ(252), ins = 4.6;
+    const litArch = (cx, cy, cz, ang, w, h) => { const g = new THREE.ExtrudeGeometry(pArch(w, h).s, { depth: 0.12, bevelEnabled: false, curveSegments: 10 }); const m = new THREE.Mesh(g, glow); m.position.set(cx, cy, cz); m.rotation.y = ang; m.name = 'minaret_window'; G.dome.add(m); };
+    [[mx0 + ins, mz0 + ins], [mx1 - ins, mz0 + ins], [mx0 + ins, mz1 - ins], [mx1 - ins, mz1 - ins]].forEach(([x, z]) => {
+      let y = yR; const sw = 6.6, sh = 19;
+      box(sw, sh, sw, M.wall, G.dome, x, y + sh / 2, z, 'minaret_shaft');
+      y += sh;
+      box(sw + 1.1, 0.7, sw + 1.1, M.trim, G.dome, x, y + 0.35, z, 'minaret_cornice'); y += 0.7;
+      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2, nx = Math.sin(ang), nz = Math.cos(ang), tx = Math.cos(ang), tz = -Math.sin(ang);
+        for (let k = -2; k <= 2; k++) box(0.55, 0.7, 0.3, M.trim, G.dome, x + nx * (sw + 0.8) / 2 + tx * k * 1.45, y + 0.35, z + nz * (sw + 0.8) / 2 + tz * k * 1.45, 'minaret_merlon'); }
+      const w1 = 5.4, h1 = 7.2; y += 0.2;
+      box(w1, h1, w1, M.wall, G.dome, x, y + h1 / 2, z, 'minaret_stage1');
+      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2; litArch(x + Math.sin(ang) * (w1 / 2 + 0.01), y + 1.2, z + Math.cos(ang) * (w1 / 2 + 0.01), ang, 2.1, 4.6); }
+      y += h1; box(w1 + 0.7, 0.45, w1 + 0.7, M.trim, G.dome, x, y + 0.22, z, 'minaret_band'); y += 0.45;
+      const w2 = 4.4, h2 = 4.6;
+      box(w2, h2, w2, M.wall, G.dome, x, y + h2 / 2, z, 'minaret_stage2');
+      for (let f = 0; f < 4; f++) { const ang = f * Math.PI / 2; litArch(x + Math.sin(ang) * (w2 / 2 + 0.01), y + 0.8, z + Math.cos(ang) * (w2 / 2 + 0.01), ang, 1.5, 3.0); }
+      y += h2; box(w2 + 0.6, 0.4, w2 + 0.6, M.trim, G.dome, x, y + 0.2, z, 'minaret_band'); y += 0.4;
+      const dp = [[0, 0], [2.15, 0], [2.25, 0.5], [2.1, 1.3], [1.7, 2.2], [1.05, 3.0], [0.4, 3.5], [0, 3.65]].map(q => new THREE.Vector2(q[0], q[1]));
+      mesh(new THREE.LatheGeometry(dp, 32), M.dome, G.dome, x, y, z, 'minaret_dome');
+      mesh(new THREE.LatheGeometry([[0, 0], [0.18, 0], [0.22, 0.25], [0.08, 0.45], [0.04, 1.1], [0, 1.3]].map(q => new THREE.Vector2(q[0], q[1])), 10), M.gold, G.dome, x, y + 3.55, z, 'minaret_finial');
+    });
+  }
+  [[WIN.frame, M.trim, G.walls, 'window_frames'], [WIN.glass, M_winGlass, G.glass, 'window_glass'], [WIN.bar, M.trim, G.walls, 'window_mullions'], [WIN.lat, M_lattice, G.walls, 'lattice_windows'], [WIN.dglass, M.doorGlass, G.glass, 'door_fanlight'], [WIN.dbar, M.doorFrame, G.walls, 'door_fanlight_bars']]
+    .forEach(([list, mat, par, nm]) => { if (list.length) { const m = mesh(mergeGeos(list), mat, par, 0, 0, 0, nm); m.castShadow = false; } });
+
   return { root, groups: G, labels, pickables, zones: ZONES, center: new THREE.Vector3(98.5, 0, 111), north, siteU: U, entry: { cc, gc, ecx, stepsEnd } };
 }
 if (typeof module !== 'undefined') module.exports = { buildMasjid };
