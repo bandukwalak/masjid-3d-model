@@ -56,21 +56,22 @@ function buildMasjid(THREE, options) {
     new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.88, metalness: 0 }, extra || {}));
 
   const mat = {
-    wall: material(0xeee8dc),
-    plinth: material(0xc9bfae),
-    roof: material(0xd8d1c4),
-    trim: material(0xf6f1e6, { roughness: 0.7 }),
-    stone: material(0xe6dccb),
+    wall: material(0xe0cca4), // cream / beige
+    plinth: material(0xcbb895),
+    roof: material(0xd4c19c),
+    trim: material(0xeadbb9, { roughness: 0.7 }), // lighter cream for cornices and edges
+    windowTrim: material(0x4a2e1c, { roughness: 0.55 }), // dark brown window frames
+    stone: material(0xdcc8a2),
     glass: material(0x8fb2c6, { roughness: 0.1, metalness: 0.15, transparent: true, opacity: 0.5 }),
     archGlass: material(0x6f8796, { roughness: 0.15, metalness: 0.2 }),
-    dome: material(0xf3efe6, { roughness: 0.5 }),
+    dome: material(0xe8d8b6, { roughness: 0.5 }),
     gold: material(0xd4a640, { roughness: 0.28, metalness: 0.75 }),
     brass: material(0xc59a45, { roughness: 0.4, metalness: 0.5 }),
     steel: material(0x9aa3a8, { roughness: 0.4, metalness: 0.4 }),
     white: material(0xf7f7f5, { roughness: 0.3 }),
     wood: material(0x8a5d3b),
-    leaf: material(0x46703a, { flatShading: true }),
-    leafDark: material(0x2f5528, { flatShading: true }),
+    leaf: material(0xc8642a, { flatShading: true }), // fall colours: orange
+    leafDark: material(0x9e3324, { flatShading: true }), // deep red
     hedge: material(0x3d6b35, { flatShading: true }),
     trunk: material(0x6b4f35),
     water: material(0x5f9fc0, { roughness: 0.1 }),
@@ -145,6 +146,11 @@ function buildMasjid(THREE, options) {
     tex.anisotropy = 4;
     return tex;
   }
+
+  // Fall leaf colours for the trees and the leaves on the ground: orange, red, gold, rust brown, late green.
+  const FALL = [0xc8642a, 0x9e3324, 0xd9a32e, 0x8a5226, 0x7d8a3a].map((c) => material(c, { flatShading: true }));
+  let fallPick = 0;
+  const nextFall = () => FALL[fallPick++ % FALL.length]; // cycles through the colours for single trees
 
   // Flower colours: red, pink, yellow, white, purple, orange.
   const FLOWER = [0xc8324a, 0xe57aa6, 0xf2c230, 0xf4f1ea, 0x8a5cc2, 0xe8692c].map((c) =>
@@ -1277,7 +1283,7 @@ function buildMasjid(THREE, options) {
     }
     [[26, 452], [65, 452], [26, 494], [65, 494]].forEach(([px, py]) => { // one small tree in each corner
       mesh(new THREE.CylinderGeometry(0.35, 0.45, 5, 8), mat.trunk, F, planX(px), 3.5, planZ(py), 'garden_tree');
-      mesh(new THREE.SphereGeometry(2.4, 12, 10), mat.leaf, F, planX(px), 7.2, planZ(py), 'garden_tree');
+      mesh(new THREE.SphereGeometry(2.4, 12, 10), nextFall(), F, planX(px), 7.2, planZ(py), 'garden_tree');
     });
   }
 
@@ -1607,7 +1613,8 @@ function buildMasjid(THREE, options) {
 
   // ── WOODS: trees everywhere outside the clearing, on this side of the road ──
   if (opt.trees) {
-    const trunks = [], canopyLight = [], canopyDark = [];
+    const trunks = [];
+    const canopies = FALL.map(() => []); // one list per fall colour
     for (let v = -500; v <= 1900; v += 48) {
       for (let u = -600; u <= 1700; u += 48) {
         const pu = u + (random() - 0.5) * 40;
@@ -1624,20 +1631,41 @@ function buildMasjid(THREE, options) {
         const canopy = new THREE.IcosahedronGeometry(7 * size + random() * 3, 0);
         canopy.scale(1, 1.25, 1);
         canopy.translate(p[0], treeH * 0.62 + 4, p[1]);
-        (random() > 0.5 ? canopyLight : canopyDark).push(canopy);
+        canopies[Math.min(FALL.length - 1, Math.floor(random() * FALL.length))].push(canopy);
       }
     }
     if (trunks.length) {
       mesh(mergeGeometries(trunks), mat.trunk, groups.trees, 0, 0, 0, 'woods_trunks').castShadow = false;
-      mesh(mergeGeometries(canopyLight), mat.leaf, groups.trees, 0, 0, 0, 'woods_canopy_a');
-      mesh(mergeGeometries(canopyDark), mat.leafDark, groups.trees, 0, 0, 0, 'woods_canopy_b');
+      canopies.forEach((list, i) => { if (list.length) mesh(mergeGeometries(list), FALL[i], groups.trees, 0, 0, 0, 'woods_canopy_' + i); });
     }
     // ornamental trees just inside the fence, north of the gate
     for (let s = gateAlongRoad + GATE_SPAN / 2 + 20; s < clearingNorthEnd - 10; s += 45) {
       const p = offset(along(roadStart, s), FENCE_OFFSET + 12);
       mesh(new THREE.CylinderGeometry(0.5, 0.7, 7, 8), mat.trunk, groups.trees, p[0], 3.5, p[1]);
-      mesh(new THREE.IcosahedronGeometry(4.5, 1), mat.leaf, groups.trees, p[0], 9.5, p[1], 'street_tree');
+      mesh(new THREE.IcosahedronGeometry(4.5, 1), nextFall(), groups.trees, p[0], 9.5, p[1], 'street_tree');
     }
+
+    // ── Fallen leaves on the ground behind the building (none at the front, road or parking side) ──
+    const isBehind = (x, z) => {
+      if (x > 170) return false; // nothing toward the road
+      if (x < planX(19.5) - 2) return true; // west of the Madressah and Mawaid
+      if (x < planX(100.5)) return z < planZ(321.75) - 2; // north of the dine extension
+      if (x < planX(329.5)) return z < planZ(220) - 2; // north of the dine area
+      return z < planZ(79) - 2; // behind the Masjid's back wall
+    };
+    const fallen = FALL.map(() => []);
+    for (let z = -130; z < 220; z += 1.6) {
+      for (let x = -130; x < 170; x += 1.6) {
+        const px = x + (random() - 0.5) * 1.6, pz = z + (random() - 0.5) * 1.6;
+        if (!isBehind(px, pz) || random() > 0.55) continue;
+        const leaf = new THREE.PlaneGeometry(0.55 + random() * 0.25, 0.35 + random() * 0.15);
+        leaf.rotateX(-Math.PI / 2);
+        leaf.rotateY(random() * Math.PI);
+        leaf.translate(px, 0.06 + random() * 0.03, pz);
+        fallen[Math.floor(random() * FALL.length) % FALL.length].push(leaf);
+      }
+    }
+    fallen.forEach((list, i) => { if (list.length) mesh(mergeGeometries(list), FALL[i], groups.trees, 0, 0, 0, 'fallen_leaves_' + i).castShadow = false; });
   }
 
   // Direction of true north in model axes (for the page's north arrow).
@@ -1712,9 +1740,9 @@ function buildMasjid(THREE, options) {
 
   // ── Merge all window pieces into a handful of shapes (much faster to draw) ──
   [
-    [windowParts.frame, mat.trim, groups.walls, 'window_frames'],
+    [windowParts.frame, mat.windowTrim, groups.walls, 'window_frames'],
     [windowParts.glass, windowGlassMat, groups.glass, 'window_glass'],
-    [windowParts.bar, mat.trim, groups.walls, 'window_mullions'],
+    [windowParts.bar, mat.windowTrim, groups.walls, 'window_mullions'],
     [windowParts.lattice, latticeMat, groups.walls, 'lattice_windows'],
     [windowParts.doorGlass, mat.plainDoorGlass, groups.glass, 'door_fanlight'],
     [windowParts.doorBar, mat.bronze, groups.walls, 'door_fanlight_bars'],
