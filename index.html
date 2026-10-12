@@ -224,7 +224,7 @@ function buildMasjid(THREE, options) {
     plinth: material(0xcbb895),
     roof: material(0xd4c19c),
     trim: material(0xeadbb9, { roughness: 0.7 }), // lighter cream for cornices and edges
-    windowTrim: material(0x4a2e1c, { roughness: 0.55 }), // dark brown window frames
+    windowTrim: material(0x3b2418, { roughness: 0.55 }), // espresso-brown window frames
     stone: material(0xdcc8a2),
     glass: material(0x8fb2c6, { roughness: 0.1, metalness: 0.15, transparent: true, opacity: 0.5 }),
     archGlass: material(0x6f8796, { roughness: 0.15, metalness: 0.2 }),
@@ -1358,7 +1358,6 @@ function buildMasjid(THREE, options) {
     // path from the bottom landing to the entry plaza
     flat([[xBottom - 5, zFar], [xBottom, zFar], [xBottom, stepsEnd + 4], [xBottom - 5, stepsEnd + 4]], 0, mat.pave, groups.site, 'ramp_walk', 0.12);
     flat([[xBottom - 5, stepsEnd], [entranceX - 21, stepsEnd], [entranceX - 21, stepsEnd + 4], [xBottom - 5, stepsEnd + 4]], 0, mat.pave, groups.site, 'ramp_walk', 0.12);
-    labels.push({ name: 'Ramp', dim: '1:12 slope', site: true, x: xBottom + length / 2, y: 6, z: (zNear + zFar) / 2 });
   }
 
   // ── STAIRS & LIFT: up flight on the east, down flight on the west, landing at the north ──
@@ -1499,7 +1498,6 @@ function buildMasjid(THREE, options) {
   flat([offset(roadFar0, -17), offset(roadFar1, -17), offset(roadFar1, -400), offset(roadFar0, -400)], 0.04, mat.gravel, SITE, 'neighbouring_yard');
   {
     const p = offset(along(roadStart, roadLength * 0.78), -2);
-    labels.push({ name: 'Barney Rd', dim: '', site: true, x: p[0], y: 3, z: p[1] });
   }
   const distanceAlongRoad = (p) => (p[0] - roadStart[0]) * roadDir[0] + (p[1] - roadStart[1]) * roadDir[1];
 
@@ -1662,7 +1660,6 @@ function buildMasjid(THREE, options) {
     lampPost(entranceX + side * 8.3, zA + 0.5, LAND);
     lampPost(entranceX + side * 8.3, zB - 0.5, LAND);
   });
-  labels.push({ name: 'Entry plaza', dim: '', site: true, x: entranceX, y: 3, z: stepsEnd + PLAZA_DEPTH / 2 + 2 });
 
   // ── Hedges and flowers along the building front ──
   const madressahEdgeX = planX(219) + 10.5;
