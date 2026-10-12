@@ -1138,38 +1138,7 @@ function buildMasjid(THREE, options) {
   // ── MAIN DOME: square tower → arched lantern → dome → gold finial (from the reference photo) ──
   const domeX = planX(416.25), domeZ = planZ(131.25);
   const masjidRoofTop = 3 + TWO_STOREY_H + 1;
-  if (!opt.cut) {
-    const D = groups.dome;
-    const towerW = 26, towerH = 9;
-    box(towerW, towerH, towerW, mat.wall, D, domeX, masjidRoofTop + towerH / 2, domeZ, 'dome_tower');
-    for (let face = 0; face < 4; face++) {
-      const ang = (face * Math.PI) / 2;
-      towerWindow(D, domeX + Math.sin(ang) * (towerW / 2 + 0.02), masjidRoofTop + 1.5, domeZ + Math.cos(ang) * (towerW / 2 + 0.02), ang, 3.6, 6.2);
-    }
-    let y = masjidRoofTop + towerH;
-    box(towerW + 2.4, 0.7, towerW + 2.4, mat.trim, D, domeX, y + 0.35, domeZ, 'tower_cornice');
-    box(towerW + 3.0, 0.5, towerW + 3.0, mat.trim, D, domeX, y + 0.95, domeZ, 'tower_coping');
-    y += 1.2;
-
-    // lantern: smaller square stage with two arched windows on each face
-    const lanternW = 17, lanternH = 11;
-    box(lanternW, lanternH, lanternW, mat.wall, D, domeX, y + lanternH / 2, domeZ, 'lantern');
-    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b]) =>
-      box(1.5, lanternH, 1.5, mat.stone, D, domeX + a * (lanternW / 2 - 0.4), y + lanternH / 2, domeZ + b * (lanternW / 2 - 0.4), 'lantern_pilaster'),
-    );
-    for (let face = 0; face < 4; face++) {
-      const ang = (face * Math.PI) / 2;
-      const nx = Math.sin(ang), nz = Math.cos(ang); // out of the face
-      const tx = Math.cos(ang), tz = -Math.sin(ang); // along the face
-      [-3.4, 3.4].forEach((offset) =>
-        towerWindow(D, domeX + nx * (lanternW / 2 + 0.02) + tx * offset, y + 1.6, domeZ + nz * (lanternW / 2 + 0.02) + tz * offset, ang, 3.0, 7.2),
-      );
-    }
-    y += lanternH;
-    box(lanternW + 1.6, 0.6, lanternW + 1.6, mat.trim, D, domeX, y + 0.3, domeZ, 'lantern_cornice');
-    box(lanternW + 2.2, 0.4, lanternW + 2.2, mat.trim, D, domeX, y + 0.8, domeZ, 'lantern_coping');
-    // (the dome itself has been removed; the tower and lantern stay)
-  }
+  // (the main dome, its tower and lantern have been removed from the Masjid roof)
 
   // ── ENTRANCE PORCH: columns, canopy and steps ──
   const porch = { x0: planX(375), x1: planX(456), z0: planZ(435), z1: planZ(481) };
