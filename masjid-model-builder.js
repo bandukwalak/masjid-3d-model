@@ -91,9 +91,9 @@ function buildMasjid(THREE, options) {
     sand: material(0xd8c49a),
     saff: material(0xd8c27a, { roughness: 0.7 }), // prayer-row lines on the carpet
     lamp: material(0xfff3d6, { emissive: 0x7a6a40, roughness: 0.4 }),
-    // frosted glass with a geometric star pattern (entrance front), see starPatternTexture()
+    // frosted glass with a geometric star pattern (the two front doors), see starPatternTexture()
     doorGlass: material(typeof document === 'undefined' ? 0xc3cfd3 : 0xffffff, { roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.88, map: starPatternTexture() }),
-    plainDoorGlass: material(0x8fb2c6, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.5 }), // the door leaves themselves: clear, no pattern
+    plainDoorGlass: material(0x8fb2c6, { roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.5 }), // clear glass around the front doors
     bronze: material(0x5b3a24, { roughness: 0.4, metalness: 0.45 }), // entrance door and glass frames
     doorFrame: material(0x3a3d40, { roughness: 0.35, metalness: 0.6 }),
   };
@@ -351,7 +351,7 @@ function buildMasjid(THREE, options) {
         .filter((v) => opt.cut || v[2] !== 1)
         .sort((a, b) => a[0] - b[0]);
       // where a curtain wall overlaps a door, the curtain wall's glass already fills it
-      // (the door leaves stay clear glass up to the crossbar; the pattern is only around them)
+      // (the door leaves, up to the crossbar, get the star-pattern glass; everything around them is clear)
       if (holes.some((v) => v[2] === 3)) {
         const curtainTop = holes.find((v) => v[2] === 3)[1];
         holes = holes.some((v) => v[2] === 2) ? [[0, 7.6, 4], [7.6, curtainTop, 3]] : holes.filter((v) => v[2] === 3);
@@ -359,7 +359,8 @@ function buildMasjid(THREE, options) {
       let y = 0;
       for (const [bottom, top, glass] of holes) {
         if (bottom > y) piece(p, q, y, bottom, wallMat, thick); // wall below the opening
-        if (glass) piece(p, q, bottom, top, glass === 4 ? mat.plainDoorGlass : glass >= 2 ? mat.doorGlass : mat.glass, thick * 0.3);
+        // 4 = the door leaves (star-pattern glass); 3 = the glass around them (clear)
+        if (glass) piece(p, q, bottom, top, glass === 4 || glass === 2 ? mat.doorGlass : glass === 3 ? mat.plainDoorGlass : mat.glass, thick * 0.3);
         y = Math.max(y, top);
       }
       piece(p, q, y, topOfWall, wallMat, thick); // wall above the last opening
@@ -872,7 +873,8 @@ function buildMasjid(THREE, options) {
     const outStart = Math.asin((cz - wallFace) / outerR);
     const inStart = Math.asin((cz - wallFace) / innerR);
     const doorH = 7.5;
-    const outDoor = Math.asin(2.1 / outerR), inDoor = Math.asin(2.1 / innerR); // a 4 ft door at the back
+    const outDoor = Math.asin(2.1 / outerR), inDoor = Math.asin(2.1 / innerR); // a 4 ft door
+    const doorAngle = 2.25; // on the right side of the bay, seen from behind (west side on the drawing)
 
     // A curved band of wall: outer edge from oa to ob, inner edge from ia to ib, raised h ft from y.
     const curvedWall = (oa, ob, ia, ib, y, h, name, m) => {
@@ -884,8 +886,8 @@ function buildMasjid(THREE, options) {
       mesh(g, m || mat.wall, groups.walls, cx, y, cz, name);
     };
     const lowH = Math.min(doorH, height);
-    curvedWall(outStart, Math.PI / 2 - outDoor, inStart, Math.PI / 2 - inDoor, floor, lowH, 'qibla_wall'); // east of the door
-    curvedWall(Math.PI / 2 + outDoor, Math.PI - outStart, Math.PI / 2 + inDoor, Math.PI - inStart, floor, lowH, 'qibla_wall'); // west of the door
+    curvedWall(outStart, doorAngle - outDoor, inStart, doorAngle - inDoor, floor, lowH, 'qibla_wall'); // from the east end up to the door
+    curvedWall(doorAngle + outDoor, Math.PI - outStart, doorAngle + inDoor, Math.PI - inStart, floor, lowH, 'qibla_wall'); // from the door to the west end
     if (height > doorH) curvedWall(outStart, Math.PI - outStart, inStart, Math.PI - inStart, floor + doorH, height - doorH, 'qibla_wall'); // above
 
     // floor (tap for info): the part of the circle outside the wall face
@@ -904,38 +906,27 @@ function buildMasjid(THREE, options) {
     };
     pickables.push(floorMesh);
 
-    // the back door: wooden double doors in a stone frame
-    const doorX = cx, doorZ = cz - outerR + 0.15;
-    box(4.4, doorH + 0.6, 0.5, mat.trim, groups.walls, doorX, floor + (doorH + 0.6) / 2, doorZ - 0.25, 'qibla_door_frame');
-    box(3.8, doorH - 0.1, 0.3, mat.wood, groups.walls, doorX, floor + doorH / 2, doorZ - 0.45, 'qibla_door');
-    box(0.08, doorH - 0.1, 0.32, mat.doorFrame, groups.walls, doorX, floor + doorH / 2, doorZ - 0.46, 'qibla_door_split');
-    [-0.35, 0.35].forEach((dx) => box(0.1, 0.9, 0.12, mat.gold, groups.walls, doorX + dx, floor + 3.6, doorZ - 0.65, 'qibla_door_handle'));
-
-    // landing and steps down to the ground at the back
-    box(6.5, floor, 3, mat.pave, groups.site, doorX, floor / 2, doorZ - 1.6 - 0.2, 'qibla_landing');
-    for (let i = 0; i < 6; i++) {
-      const top = floor - 0.5 * (i + 1);
-      if (top <= 0) break;
-      box(6.5, top, 1, mat.pave, groups.site, doorX, top / 2, doorZ - 3.3 - 0.5 - i, 'qibla_step');
-    }
-    flat([[doorX - 4, doorZ - 8.8], [doorX + 4, doorZ - 8.8], [doorX + 4, doorZ - 22], [doorX - 4, doorZ - 22]], 0, mat.pave, groups.site, 'qibla_path', 0.12);
-
-    // a small pointed-arch window on each side of the door
-    if (!opt.cut) {
-      [0.95, Math.PI - 0.95].forEach((a) => {
-        const out = [Math.cos(a), -Math.sin(a)]; // outward direction in plan
-        const turn = Math.atan2(out[0], out[1]);
-        const frame = pointedArch(2.6, 5.6).s;
-        frame.holes.push(pointedArch(2.0, 5.0).s);
-        [[frame, mat.trim, 0.0, 0.2, -0.2], [pointedArch(2.0, 5.0).s, windowGlassMat, 0.06, 0.25, 0.1]].forEach(([shape, m, push, depth, dy]) => {
-          const g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 10 });
-          const w = new THREE.Mesh(g, m);
-          w.position.set(cx + out[0] * (outerR - 0.05 + push), floor + 6 + dy, cz + out[1] * (outerR - 0.05 + push));
-          w.rotation.y = turn;
-          w.name = 'qibla_window';
-          groups.walls.add(w);
-        });
-      });
+    // the door: wooden double doors in a stone frame, with a small staircase down to the ground.
+    // Built in a little group that faces outward from the curve at doorAngle (local +z = outward).
+    {
+      const out = [Math.cos(doorAngle), -Math.sin(doorAngle)];
+      const door = new THREE.Group();
+      door.name = 'qibla_entrance';
+      door.position.set(cx + out[0] * outerR, 0, cz + out[1] * outerR);
+      door.rotation.y = Math.atan2(out[0], out[1]);
+      groups.walls.add(door);
+      box(4.4, doorH + 0.6, 0.5, mat.trim, door, 0, floor + (doorH + 0.6) / 2, 0.1, 'qibla_door_frame');
+      box(3.8, doorH - 0.1, 0.3, mat.wood, door, 0, floor + doorH / 2, 0.25, 'qibla_door');
+      box(0.08, doorH - 0.1, 0.32, mat.doorFrame, door, 0, floor + doorH / 2, 0.27, 'qibla_door_split');
+      [-0.35, 0.35].forEach((dx) => box(0.1, 0.9, 0.12, mat.gold, door, dx, floor + 3.6, 0.45, 'qibla_door_handle'));
+      // small landing, then six 6" steps
+      box(4.6, floor, 2.2, mat.pave, door, 0, floor / 2, 1.1, 'qibla_landing');
+      for (let i = 0; i < 6; i++) {
+        const top = floor - 0.5 * (i + 1);
+        if (top <= 0) break;
+        box(4.6, top, 0.9, mat.pave, door, 0, top / 2, 2.2 + 0.45 + i * 0.9, 'qibla_step');
+      }
+      box(4.6, 0.12, 4, mat.pave, door, 0, 0.06, 2.2 + 5 * 0.9 + 2, 'qibla_path');
     }
 
     // gold band round the inside
@@ -998,7 +989,7 @@ function buildMasjid(THREE, options) {
   room({
     name: 'Main Entrance', dim: "21'0\" × 11'7\" (double height)", zone: 'circ',
     r: [380, 397, 450, 435], fl: 2.5, two: true, void: 'all', nw: ['N'], lvl: "+2'6\"", parapet: 'S',
-    o: [['S', 380, 450, 'curtain'], ['S', 397.5, 435, 'gdoor'], ['W', 427, 435], ['E', 427, 435]], // whole front is glass
+    o: [['S', 380, 450, 'curtain'], ['S', 397.5, 435, 'gdoor'], ['S', 393, 437, 'uwin'], ['W', 427, 435], ['E', 427, 435]], // glass front below the porch roof, lattice windows above it
   });
   room({
     name: 'Women Shoe & Coat', dim: "15'6\" × 14'3\"", zone: 'circ', r: [450, 397, 501, 446], fl: 2.5, two: true, lvl: "+2'6\"", parapet: 'S',
@@ -1301,9 +1292,23 @@ function buildMasjid(THREE, options) {
     );
 
     // Garden courtyard: fountain and small trees
-    mesh(new THREE.CylinderGeometry(2.6, 2.8, 1.2, 24), mat.pave, F, planX(55), 1.6, planZ(480), 'garden_fountain');
-    mesh(new THREE.CylinderGeometry(2.2, 2.2, 0.2, 24), mat.water, F, planX(55), 2.15, planZ(480), 'garden_water');
-    [[38, 462], [45, 490], [62, 458], [66, 492], [30, 478]].forEach(([px, py]) => {
+    // Garden fountain: octagonal pool, a pedestal with two tiered bowls, a gold finial and falling water.
+    {
+      const fx = planX(45.5), fz = planZ(472.75), g0 = 1; // centre of the garden; garden ground level
+      const jet = material(0xcfe6f2, { roughness: 0.05, transparent: true, opacity: 0.55 });
+      mesh(new THREE.CylinderGeometry(3.6, 3.8, 1.4, 8), mat.stone, F, fx, g0 + 0.7, fz, 'garden_fountain_pool'); // pool rim
+      mesh(new THREE.CylinderGeometry(3.15, 3.15, 0.2, 8), mat.water, F, fx, g0 + 1.3, fz, 'garden_fountain_water');
+      mesh(new THREE.CylinderGeometry(0.45, 0.7, 3.2, 12), mat.stone, F, fx, g0 + 2.9, fz, 'garden_fountain_pedestal');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [0.5, 0], [1.9, 0.5], [2.0, 0.8], [0, 0.6]]), 24), mat.stone, F, fx, g0 + 4.2, fz, 'garden_fountain_bowl');
+      mesh(new THREE.CylinderGeometry(1.8, 1.8, 0.08, 24), mat.water, F, fx, g0 + 4.9, fz, 'garden_fountain_bowl_water');
+      mesh(new THREE.CylinderGeometry(0.25, 0.4, 1.6, 10), mat.stone, F, fx, g0 + 5.6, fz, 'garden_fountain_stem');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [0.3, 0], [1.0, 0.3], [1.05, 0.5], [0, 0.4]]), 20), mat.stone, F, fx, g0 + 6.3, fz, 'garden_fountain_top_bowl');
+      mesh(new THREE.LatheGeometry(profile([[0, 0], [0.22, 0], [0.26, 0.3], [0.1, 0.55], [0.05, 1.1], [0, 1.3]]), 12), mat.gold, F, fx, g0 + 6.75, fz, 'garden_fountain_finial');
+      // water falling from each bowl as a thin, open sheet
+      mesh(new THREE.CylinderGeometry(1.05, 1.95, 1.0, 24, 1, true), jet, F, fx, g0 + 6.0, fz, 'garden_fountain_fall').castShadow = false;
+      mesh(new THREE.CylinderGeometry(2.0, 3.0, 3.4, 24, 1, true), jet, F, fx, g0 + 3.0, fz, 'garden_fountain_fall').castShadow = false;
+    }
+    [[26, 452], [65, 452], [26, 494], [65, 494]].forEach(([px, py]) => { // one small tree in each corner
       mesh(new THREE.CylinderGeometry(0.35, 0.45, 5, 8), mat.trunk, F, planX(px), 3.5, planZ(py), 'garden_tree');
       mesh(new THREE.SphereGeometry(2.4, 12, 10), mat.leaf, F, planX(px), 7.2, planZ(py), 'garden_tree');
     });
@@ -1746,7 +1751,7 @@ function buildMasjid(THREE, options) {
     [windowParts.glass, windowGlassMat, groups.glass, 'window_glass'],
     [windowParts.bar, mat.trim, groups.walls, 'window_mullions'],
     [windowParts.lattice, latticeMat, groups.walls, 'lattice_windows'],
-    [windowParts.doorGlass, mat.doorGlass, groups.glass, 'door_fanlight'],
+    [windowParts.doorGlass, mat.plainDoorGlass, groups.glass, 'door_fanlight'],
     [windowParts.doorBar, mat.bronze, groups.walls, 'door_fanlight_bars'],
   ].forEach(([list, m, parent, name]) => {
     if (list.length) mesh(mergeGeometries(list, m === mat.doorGlass), m, parent, 0, 0, 0, name).castShadow = false;
